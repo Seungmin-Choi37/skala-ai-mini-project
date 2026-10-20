@@ -54,8 +54,10 @@ def get_substance_safety(name: str, lookup: str = "") -> dict:
     mode = os.environ.get("CHEM_DATA_MODE", "live")
     if name.upper() in chem_rules.AMBIGUOUS_ABBR:
         candidates = " / ".join(chem_rules.AMBIGUOUS_ABBR[name.upper()])
-        return _not_found(name, f"'{name}'은(는) 여러 물질의 약어라 어떤 물질인지 확정할 수 없습니다 "
-                                f"(후보: {candidates}) — 정식 이름이나 CAS 번호로 다시 물어봐 주세요")
+        result = _not_found(name, f"'{name}'은(는) 여러 물질의 약어라 어떤 물질인지 확정할 수 없습니다 "
+                                  f"(후보: {candidates}) — 정식 이름이나 CAS 번호로 다시 물어봐 주세요")
+        result["candidates"] = chem_rules.abbr_candidates(name)
+        return result
     if chem_rules.is_abbreviation(name):
         return _not_found(name, f"'{name}'이(가) 어떤 물질의 약어인지 알 수 없습니다 — 추측하지 않고 "
                                 "정식 이름이나 CAS 번호로 다시 물어봐 주시길 요청합니다")

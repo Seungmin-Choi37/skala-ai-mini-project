@@ -46,6 +46,9 @@ class AgentState(TypedDict, total=False):
     last_prompt: str
     cost_usd: float
     events: list[dict]
+    conflicts: list[dict]
+    unknown_mix: list[str]
+    notice: dict
 
 
 def _cost(state: AgentState, usage: dict) -> float:
@@ -260,7 +263,10 @@ async def analysis_node(state: AgentState, deps: SupervisorDeps) -> dict:
             t["status"] = "done"
     collected = state.get("collected", []) + [{"source": "analysis", "data": summary}]
     event = {"type": "AnalysisCompleted", "conflicts": len(conflicts)}
-    return {"tasks": new_tasks, "collected": collected, "events": state["events"] + [event]}
+    pairs = [{"pair": p.split(" + "), "warnings": e["w"], "advice": e["a"]}
+             for p, e in (by_pair.items() if conflicts else [])]
+    return {"tasks": new_tasks, "collected": collected, "events": state["events"] + [event],
+            "conflicts": pairs, "unknown_mix": unknown}
 
 
 @traceable(name="write_node")
@@ -333,9 +339,49 @@ async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
             "events": state["events"] + [event]}
 
 
+def build_notice(state: AgentState) -> dict:
+    """화면의 라벨 카드용 구조화 데이터 — 안내문 텍스트와 별개로, 코드가 확인한 사실만 담는다."""
+    collected = state.get("collected", [])
+    intent = next((c["data"] for c in collected if c["source"] == "intent"), {})
+    guides = [c["data"] for c in collected if c["source"] == "guide"]
+    sds = _sds(state)
+    substances = []
+    for s in sds:
+        item = {"name": chem_rules.display_name(s) if s.get("found") else s.get("query"),
+                "name_en": s.get("name_en"), "cas": s.get("cas"), "found": bool(s.get("found")),
+                "source": s.get("source"), "source_url": s.get("source_url"), "note": s.get("note")}
+        if s.get("found"):
+            codes = chem_rules.pictogram_codes(s.get("pictograms", []))
+            item.update(signal=s.get("signal_word"),
+                        pictograms=[{"code": c, "label": chem_rules.PICTOGRAMS[c]} for c in codes],
+                        hazards=s.get("hazard_statements", [])[:6],
+                        first_aid=s.get("first_aid", {}), handling=s.get("handling"),
+                        storage=s.get("storage"), flash_point=s.get("flash_point"))
+        else:
+            item.update(reason=s.get("reason"), candidates=s.get("candidates", []))
+        substances.append(item)
+
+    def guide_lines(prefix: str) -> list[str]:
+        return list(dict.fromkeys(line[len(prefix):].strip() for g in guides
+                                  for line in g.splitlines() if line.startswith(prefix)))
+
+    found = [s for s in sds if s.get("found")]
+    return {
+        "kind": "unknown" if sds and not found else ("notice" if sds else "general"),
+        "intent": intent,
+        "substances": substances,
+        "checked_mix": len(sds) >= 2,
+        "conflicts": state.get("conflicts", []),
+        "unknown_mix": state.get("unknown_mix", []),
+        "ppe": chem_rules.ppe_for(found),
+        "disposal": guide_lines("폐기:"),
+        "accident": guide_lines("사고 시:"),
+    }
+
+
 @traceable(name="finalize_node")
 async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    return {"final": state["draft"],
+    return {"final": state["draft"], "notice": build_notice(state),
             "events": state["events"] + [{"type": "Finalize", "pipeline": "safety-v2"}]}
 
 

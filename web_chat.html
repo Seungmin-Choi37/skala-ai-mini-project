@@ -2,214 +2,630 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8" />
-<title>화학물질 안전 안내</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>사용 전 안전 확인</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    --bench: #EEF1F4;      /* 실험대 */
+    --label: #FFFFFF;      /* 라벨 용지 */
+    --ink: #1A1E23;
+    --steel: #5C6873;
+    --rule: #D6DDE3;
+    --glass: #E4EAF0;      /* 흄후드 유리 */
+    --ghs: #CF1820;        /* GHS 빨강 — 위험에만 쓴다 */
+    --ghs-soft: #FCECEC;
+    --amber: #B87800;
+    --amber-soft: #FBF2DC;
+    --ok: #1C7560;
+    --ok-soft: #E3F2EC;
+    --r-lg: 14px;
+    --r-sm: 8px;
+  }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    margin: 0; height: 100vh; display: flex; flex-direction: column;
-    font-family: -apple-system, "Apple SD Gothic Neo", sans-serif;
-    background: #1e1e2e; color: #e2e2f0;
-    overflow: hidden;   /* #log만 스크롤되게, 바디 자체는 늘어나지 않게 고정 */
+    margin: 0; background: var(--bench); color: var(--ink);
+    font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
   }
-  #app {
-    flex: 1; min-height: 0;   /* Vue 마운트 루트가 header/#log/form을 감싸므로,
-                                 body의 flex 흐름이 여기까지 이어지게 한다 */
-    display: flex; flex-direction: column;
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  #app { height: 100vh; display: flex; flex-direction: column; }
+
+  /* ── 상단 ── */
+  .top {
+    display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    background: var(--label); border-bottom: 1px solid var(--rule);
   }
-  header {
-    padding: 14px 20px; background: #262638; border-bottom: 1px solid #3a3a52;
-    font-weight: 600; font-size: 15px;
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+  .brand svg { width: 26px; height: 26px; }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--steel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.off { background: var(--ghs); }
+  .btn {
+    border: 1px solid var(--rule); background: var(--label); border-radius: 999px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
   }
-  header span { color: #8b8bd8; font-weight: 400; font-size: 13px; margin-left: 8px; }
-  #log {
-    flex: 1; min-height: 0;   /* flex 자식 기본 최소높이(콘텐츠 크기)를 풀어줘야
-                                 내용이 길어져도 바디가 안 늘어나고 여기서만 스크롤됨 */
-    overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px;
+  .btn:hover { border-color: var(--steel); }
+  .btn.solid { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  /* ── 대화 영역 ── */
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; }
+  .col { max-width: 820px; margin: 0 auto; padding: 28px 20px 40px; }
+  .turn { margin-bottom: 28px; }
+  .ask { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+  .ask p {
+    margin: 0; max-width: 78%; background: var(--ink); color: #fff;
+    padding: 10px 16px; border-radius: 18px 18px 4px 18px;
   }
-  #log::-webkit-scrollbar { width: 9px; }
-  #log::-webkit-scrollbar-track { background: transparent; }
-  #log::-webkit-scrollbar-thumb { background: #3a3a52; border-radius: 6px; }
-  #log::-webkit-scrollbar-thumb:hover { background: #4a4a68; }
-  .row { display: flex; }
-  .row.user { justify-content: flex-end; }
-  .bubble {
-    max-width: 70%; padding: 10px 14px; border-radius: 14px; line-height: 1.5;
-    font-size: 14px; white-space: pre-wrap;
+  .say { background: var(--label); border-radius: var(--r-lg); padding: 14px 18px; max-width: 78%; white-space: pre-wrap; }
+
+  /* ── 시작 화면 ── */
+  .hero { padding: 48px 0 12px; }
+  .hero h1 { font-size: 40px; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 12px; font-weight: 800; }
+  .hero p { margin: 0 0 32px; color: var(--steel); font-size: 17px; max-width: 34em; }
+  .examples { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .ex-group h2 { font-size: 13px; font-weight: 600; color: var(--steel); margin: 0 0 8px; }
+  .ex {
+    display: block; width: 100%; text-align: left; background: var(--label);
+    border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
   }
-  .row.user .bubble { background: #5b5bd6; color: white; border-bottom-right-radius: 4px; }
-  .row.agent .bubble { background: #2e2e42; border-bottom-left-radius: 4px; }
-  .steps {
-    max-width: 70%; font-size: 12px; color: #9a9ac0; padding: 6px 14px;
-    display: flex; flex-direction: column; gap: 3px;
+  .ex:hover { border-color: var(--ink); }
+
+  /* ── 처리 단계 ── */
+  .track { display: flex; gap: 4px; margin: 0 0 10px; }
+  .track span { flex: 1; height: 4px; border-radius: 2px; background: var(--rule); transition: background .3s; }
+  .track span.done { background: var(--ink); }
+  .track span.active { background: var(--steel); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .track-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--steel); margin-bottom: 12px; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--steel); text-decoration: underline; cursor: pointer; font-size: 13px; }
+  .log { margin: 0 0 14px; padding: 12px 16px; background: var(--glass); border-radius: var(--r-sm); font-size: 13px; color: var(--steel); }
+  .log ol { margin: 0; padding-left: 18px; }
+  .draft { font-size: 13px; color: var(--steel); background: var(--glass); border-radius: var(--r-sm); padding: 10px 14px; margin-bottom: 12px; white-space: pre-wrap; }
+
+  /* ── 라벨 카드 ── */
+  .label {
+    background: var(--label); border-radius: var(--r-lg);
+    box-shadow: 0 1px 0 var(--rule), 0 8px 24px rgba(26, 30, 35, .06); overflow: hidden;
   }
-  .steps .step::before { content: "⏳ "; }
-  .steps .step.done::before { content: "✓ "; color: #7ee787; }
-  .prompt-box {
-    flex-shrink: 0;   /* #log가 스크롤 영역이 되면서(min-height:0) <details>가 flex
-                         자식으로서 내용 없이 찌그러지는 걸 방지 */
-    max-width: 70%; margin-top: -4px; background: #17171f; border: 1px solid #3a3a52;
-    border-radius: 10px; font-size: 12px; overflow: hidden;
+  .alert { padding: 16px 20px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
+  .alert.danger { background: var(--ghs); color: #fff; }
+  .alert.caution { background: var(--amber-soft); color: #5C3C00; }
+  .alert strong { display: block; font-size: 17px; margin-bottom: 2px; }
+  .alert .calls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .call {
+    background: #fff; color: var(--ghs); border-radius: 999px; padding: 8px 16px;
+    font-weight: 700; text-decoration: none; white-space: nowrap;
   }
-  .prompt-box summary {
-    cursor: pointer; padding: 7px 12px; color: #8b8bd8; user-select: none;
-    list-style: none;
+  .call.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.7); }
+  .label-head { padding: 20px 20px 4px; display: flex; gap: 12px; align-items: flex-start; }
+  .label-head h3 { margin: 0; font-size: 24px; letter-spacing: -0.01em; line-height: 1.3; flex: 1; }
+  .label-head small { display: block; color: var(--steel); font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+  .tools { display: flex; gap: 6px; }
+  .sub { padding: 16px 20px; border-top: 1px solid var(--rule); }
+  .sub:first-of-type { border-top: 0; }
+  .sub h4 { margin: 0 0 10px; font-size: 14px; color: var(--steel); font-weight: 600; }
+
+  .chem { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; padding: 14px 0; border-top: 1px dashed var(--rule); }
+  .chem:first-child { border-top: 0; padding-top: 4px; }
+  .pics { display: flex; gap: 2px; grid-row: span 2; align-self: start; }
+  .pic { width: 62px; text-align: center; font-size: 11px; color: var(--steel); line-height: 1.2; word-break: keep-all; }
+  .pic svg { width: 54px; height: 54px; display: block; margin: 0 auto 2px; }
+  .chem-name { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .chem-name b { font-size: 19px; }
+  .signal { font-weight: 800; font-size: 13px; padding: 1px 8px; border-radius: 4px; }
+  .signal.danger { background: var(--ghs); color: #fff; }
+  .signal.warning { background: var(--amber-soft); color: var(--amber); }
+  .meta { color: var(--steel); font-size: 13px; }
+  .hz { margin: 0; padding-left: 18px; font-size: 14px; }
+  .hz li { margin: 2px 0; }
+
+  .pairs { display: grid; gap: 8px; }
+  .pair { border-radius: var(--r-sm); padding: 12px 14px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+  .pair .mark { font-weight: 800; font-size: 14px; grid-row: span 2; }
+  .pair.bad { background: var(--ghs-soft); }
+  .pair.bad .mark, .pair.bad b { color: var(--ghs); }
+  .pair.ok { background: var(--ok-soft); }
+  .pair.ok .mark { color: var(--ok); }
+  .pair.unk { background: var(--glass); }
+  .pair p { margin: 0; font-size: 14px; }
+
+  .ppe { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .ppe li { background: var(--glass); border-radius: var(--r-sm); padding: 6px 10px; font-size: 14px; }
+  .ppe li b { margin-right: 4px; }
+
+  details.more { border-top: 1px solid var(--rule); }
+  details.more summary {
+    list-style: none; cursor: pointer; padding: 14px 20px; font-weight: 600; display: flex; justify-content: space-between;
   }
-  .prompt-box summary::-webkit-details-marker { display: none; }
-  .prompt-box summary::before { content: "🔍 "; }
-  .prompt-box[open] summary::before { content: "🔽 "; }
-  .prompt-box pre {
-    margin: 0; padding: 10px 12px; border-top: 1px solid #3a3a52;
-    background: #11111a; color: #c3c3e0; white-space: pre-wrap; word-break: break-word;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; max-height: 320px; overflow-y: auto;
+  details.more summary::-webkit-details-marker { display: none; }
+  details.more summary::after { content: "+"; color: var(--steel); font-weight: 400; font-size: 18px; line-height: 1; }
+  details.more[open] summary::after { content: "−"; }
+  .more-body { padding: 0 20px 18px; font-size: 14px; }
+  .aid { display: grid; grid-template-columns: 4.5em 1fr; gap: 6px 12px; margin: 6px 0 14px; }
+  .aid dt { font-weight: 700; }
+  .aid dd { margin: 0; }
+  .fulltext { white-space: pre-wrap; background: var(--bench); border-radius: var(--r-sm); padding: 14px; font-size: 14px; margin: 0; }
+
+  .foot { padding: 14px 20px 18px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--steel); }
+  .foot a { color: var(--steel); }
+
+  .unknown .chem-name b { color: var(--steel); }
+  .cands { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .cand { border: 1px solid var(--ink); background: var(--label); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 14px; }
+  .cand:hover { background: var(--ink); color: #fff; }
+
+  /* ── 입력 ── */
+  .composer { background: var(--label); border-top: 1px solid var(--rule); }
+  .composer form { max-width: 820px; margin: 0 auto; padding: 14px 20px 10px; display: flex; gap: 8px; }
+  .composer input {
+    flex: 1; font: inherit; padding: 12px 16px; border-radius: 999px;
+    border: 1px solid var(--rule); background: var(--bench); color: var(--ink);
   }
-  form { display: flex; gap: 8px; padding: 14px 20px; background: #262638; border-top: 1px solid #3a3a52; }
-  input {
-    flex: 1; padding: 11px 14px; border-radius: 10px; border: 1px solid #3a3a52;
-    background: #1e1e2e; color: #e2e2f0; font-size: 14px;
+  .composer input:focus { outline: 2px solid var(--ink); outline-offset: 0; background: #fff; }
+  .composer button { white-space: nowrap; flex-shrink: 0; border-radius: 999px; padding: 0 22px; border: 0; background: var(--ink); color: #fff; font-weight: 700; cursor: pointer; }
+  .composer button:disabled { background: var(--rule); color: var(--steel); cursor: default; }
+  .hint { max-width: 820px; margin: 0 auto; padding: 0 20px 12px; font-size: 12px; color: var(--steel); }
+  .hint a { color: var(--ghs); font-weight: 700; }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 30px; }
+    .examples { grid-template-columns: 1fr; }
+    .ask p, .say { max-width: 92%; }
+    .alert { grid-template-columns: 1fr; }
+    .alert .calls { justify-content: flex-start; }
+    .chem { grid-template-columns: 1fr; }
+    .pics { grid-row: auto; }
+    .status .mode { display: none; }
   }
-  input:focus { outline: 1px solid #5b5bd6; }
-  button {
-    padding: 11px 20px; border-radius: 10px; border: none; background: #5b5bd6;
-    color: white; font-size: 14px; cursor: pointer;
+  @media (prefers-reduced-motion: reduce) {
+    .track span.active { animation: none; }
+    .track span { transition: none; }
   }
-  button:disabled { background: #3a3a52; cursor: default; }
+  @media print {
+    body { background: #fff; }
+    .top, .composer, .hint, .ask, .track, .track-meta, .log, .draft, .tools, .hero { display: none !important; }
+    .turn:not(.print-target) { display: none !important; }
+    .scroll { overflow: visible; }
+    #app { height: auto; }
+    .label { box-shadow: none; border: 1px solid #999; }
+    details.more > .more-body { display: block !important; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
-  <header>화학물질 사용 전 안전 안내 <span>{{ backendLabel }}</span></header>
-  <div id="log" ref="logEl">
-    <template v-for="item in log" :key="item.id">
-      <div v-if="item.kind === 'user'" class="row user">
-        <div class="bubble">{{ item.text }}</div>
-      </div>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><polygon points="50,6 94,50 50,94 6,50" fill="#fff" stroke="#CF1820" stroke-width="9"/><rect x="45" y="28" width="10" height="30" rx="4" fill="#1A1E23"/><circle cx="50" cy="69" r="6" fill="#1A1E23"/></svg>
+      사용 전 안전 확인
+    </div>
+    <div class="status" :title="statusTitle">
+      <span class="dot" :class="{ off: !health }"></span>
+      <span class="mode">{{ statusText }}</span>
+    </div>
+    <button class="btn" type="button" @click="newChat" :disabled="sending">새 대화</button>
+  </header>
 
-      <div v-else-if="item.kind === 'steps'" class="steps">
-        <div v-for="(step, i) in item.steps" :key="i" class="step" :class="{ done: item.done }">{{ step }}</div>
-      </div>
+  <main class="scroll" ref="scrollEl">
+    <div class="col">
+      <section v-if="!turns.length" class="hero">
+        <h1>오늘 무엇을 다루나요?</h1>
+        <p>물질 이름을 말하면 SDS를 찾아 위험성과 보호구를 정리하고, 같이 쓰면 위험한 조합까지 점검합니다.</p>
+        <div class="examples">
+          <div class="ex-group" v-for="g in examples" :key="g.title">
+            <h2>{{ g.title }}</h2>
+            <button class="ex" type="button" v-for="q in g.items" :key="q" @click="send(q)">{{ q }}</button>
+          </div>
+        </div>
+      </section>
 
-      <div v-else-if="item.kind === 'agent'" class="row agent">
-        <div class="bubble">{{ item.text }}</div>
-      </div>
+      <article v-for="t in turns" :key="t.id" class="turn" :class="{ 'print-target': printId === t.id }">
+        <div class="ask"><p>{{ t.question }}</p></div>
 
-      <details v-else-if="item.kind === 'prompt'" class="prompt-box">
-        <summary>LLM에 전달된 최종 프롬프트 보기</summary>
-        <pre>{{ item.text }}</pre>
-      </details>
-    </template>
-  </div>
-  <form @submit.prevent="onSubmit">
-    <input
-      v-model="input"
-      autocomplete="off"
-      placeholder="예: 내일 실험에 톨루엔이랑 질산 쓸 건데 주의사항 알려줘"
-    />
-    <button type="submit" :disabled="sending">보내기</button>
-  </form>
+        <template v-if="t.route !== 'chat'">
+          <div class="track" role="progressbar" :aria-valuenow="t.done.size" aria-valuemin="0" :aria-valuemax="STEPS.length" :aria-label="'처리 단계 ' + t.done.size + '/' + STEPS.length">
+            <span v-for="(s, i) in STEPS" :key="s" :class="stepClass(t, i)" :title="s"></span>
+          </div>
+          <div class="track-meta">
+            <span>{{ t.finished ? `확인 완료 · ${t.elapsed}초` : (STEPS[activeStep(t)] || '준비') + ' 중…' }}</span>
+            <button class="linkish" type="button" @click="t.showLog = !t.showLog">{{ t.showLog ? '과정 접기' : '과정 보기' }}</button>
+          </div>
+          <div class="log" v-if="t.showLog">
+            <ol><li v-for="(l, i) in t.log" :key="i">{{ l }}</li></ol>
+            <template v-if="t.drafts.length > 1">
+              <p style="margin:10px 0 4px">검수에서 반려된 초안</p>
+              <div class="draft" v-for="d in t.drafts.slice(0, -1)" :key="d.attempt">{{ d.text }}</div>
+            </template>
+          </div>
+          <div class="draft" v-if="!t.finished && t.drafts.length">{{ t.drafts[t.drafts.length - 1].text }}</div>
+        </template>
+
+        <!-- 일반 대화 -->
+        <div v-if="t.finished && (!t.notice || t.route === 'chat')" class="say">{{ t.reply }}</div>
+
+        <!-- 확인 불가 -->
+        <section v-else-if="t.finished && t.notice.kind === 'unknown'" class="label unknown" aria-label="확인 불가">
+          <div v-for="w in warnings(t.notice)" :key="w.kind" class="alert" :class="w.kind">
+            <div><strong>{{ w.title }}</strong>{{ w.body }}</div>
+            <div class="calls" v-if="w.kind === 'danger'">
+              <a class="call" href="tel:119">119 신고</a>
+              <a class="call ghost" href="tel:109">109 상담</a>
+            </div>
+          </div>
+          <div class="label-head">
+            <h3><small>확인할 수 없는 물질</small>{{ t.notice.substances.map(s => s.name).join(' · ') }}</h3>
+          </div>
+          <div class="sub">
+            <div class="chem" v-for="s in t.notice.substances" :key="s.name" style="grid-template-columns:1fr">
+              <div class="chem-name"><b>{{ s.name }}</b><span class="meta">정보 없음</span></div>
+              <p style="margin:0">{{ s.reason }}</p>
+              <p v-if="s.candidates && s.candidates.length" style="margin:12px 0 0;font-weight:600">어느 물질인가요?</p>
+              <div class="cands" v-if="s.candidates && s.candidates.length">
+                <button class="cand" type="button" v-for="c in s.candidates" :key="c.cas" @click="send(`CAS ${c.cas} 주의사항 알려줘`)">
+                  {{ c.label }} <span style="white-space:nowrap">(CAS {{ c.cas }})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="foot">확인되지 않은 물질의 유해성은 추측해서 안내하지 않습니다. 사용 전에 공식 SDS를 확인하세요.</div>
+        </section>
+
+        <!-- 안전 라벨 -->
+        <section v-else-if="t.finished && t.notice" class="label" aria-label="사용 전 안전 라벨">
+          <div v-for="w in warnings(t.notice)" :key="w.kind" class="alert" :class="w.kind">
+            <div><strong>{{ w.title }}</strong>{{ w.body }}</div>
+            <div class="calls" v-if="w.kind === 'danger'">
+              <a class="call" href="tel:119">119 신고</a>
+              <a class="call ghost" href="tel:109">109 상담</a>
+            </div>
+          </div>
+
+          <div class="label-head">
+            <h3><small>사용 전 안전 라벨</small>{{ t.notice.substances.map(s => s.name).join(' · ') || '일반 안내' }}</h3>
+            <div class="tools">
+              <button class="btn" type="button" @click="copy(t)">{{ t.copied ? '복사됨' : '복사' }}</button>
+              <button class="btn" type="button" @click="print(t)">인쇄</button>
+            </div>
+          </div>
+
+          <div class="sub">
+            <div class="chem" v-for="s in t.notice.substances" :key="s.name">
+              <div class="pics" v-if="s.found">
+                <div class="pic" v-for="p in s.pictograms" :key="p.code">
+                  <ghs-pic :code="p.code"></ghs-pic>{{ p.label }}
+                </div>
+              </div>
+              <div class="pics" v-else><div class="pic"><ghs-pic code="unknown"></ghs-pic>정보 없음</div></div>
+              <div class="chem-name">
+                <b>{{ s.name }}</b>
+                <span v-if="s.signal" class="signal" :class="signalClass(s.signal)">{{ signalText(s.signal) }}</span>
+                <span class="meta" v-if="s.cas">CAS {{ s.cas }}</span>
+                <span class="meta" v-if="s.flash_point">인화점 {{ s.flash_point }}</span>
+              </div>
+              <div v-if="s.found">
+                <ul class="hz"><li v-for="h in s.hazards.slice(0, 4)" :key="h">{{ h }}</li></ul>
+              </div>
+              <p v-else style="margin:0">{{ s.reason }}</p>
+            </div>
+          </div>
+
+          <div class="sub" v-if="t.notice.checked_mix">
+            <h4>같이 쓸 때</h4>
+            <div class="pairs">
+              <div class="pair" v-for="p in pairs(t.notice)" :key="p.key" :class="p.kind">
+                <span class="mark">{{ p.mark }}</span>
+                <b>{{ p.names }}</b>
+                <div><p v-for="line in p.lines" :key="line">{{ line }}</p></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sub">
+            <h4>보호구</h4>
+            <ul class="ppe">
+              <li v-for="p in t.notice.ppe" :key="p"><b>{{ p.split(':')[0] }}</b>{{ p.split(':').slice(1).join(':') }}</li>
+            </ul>
+          </div>
+
+          <details class="more">
+            <summary>응급조치</summary>
+            <div class="more-body">
+              <template v-for="s in t.notice.substances.filter(x => x.found)" :key="s.name">
+                <b>{{ s.name }}</b>
+                <dl class="aid"><template v-for="(v, k) in s.first_aid" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></template></dl>
+              </template>
+              <p v-if="t.notice.accident.length" style="margin:0"><b>사고 시</b> {{ t.notice.accident.join(' ') }}</p>
+            </div>
+          </details>
+          <details class="more">
+            <summary>취급 · 보관 · 폐기</summary>
+            <div class="more-body">
+              <template v-for="s in t.notice.substances.filter(x => x.found)" :key="s.name">
+                <p style="margin:0 0 4px"><b>{{ s.name }}</b></p>
+                <p style="margin:0 0 4px" v-if="s.handling">취급: {{ s.handling }}</p>
+                <p style="margin:0 0 12px" v-if="s.storage">보관: {{ s.storage }}</p>
+              </template>
+              <p style="margin:0" v-if="t.notice.disposal.length"><b>폐기</b> {{ t.notice.disposal.join(' ') }}</p>
+            </div>
+          </details>
+          <details class="more" :open="backend !== 'fake'">
+            <summary>안내문 전문</summary>
+            <div class="more-body"><p class="fulltext">{{ t.reply }}</p></div>
+          </details>
+
+          <div class="foot">
+            출처:
+            <template v-for="(s, i) in sources(t.notice)" :key="s.href || s.text">
+              <a v-if="s.href" :href="s.href" target="_blank" rel="noopener">{{ s.text }}</a><span v-else>{{ s.text }}</span><span v-if="i < sources(t.notice).length - 1">, </span>
+            </template>
+            <br />실제 사용 전에는 공식 SDS(KOSHA MSDS·제조사 SDS)와 기관 안전 규정을 확인하세요.
+          </div>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <form @submit.prevent="send(input)">
+      <input v-model="input" list="substances" autocomplete="off" aria-label="질문 입력"
+             placeholder="예: 톨루엔이랑 질산 같이 써도 돼?" :disabled="sending" />
+      <datalist id="substances">
+        <option v-for="s in catalog" :key="s.key" :value="s.name_ko">{{ s.name_en }} · CAS {{ s.cas }}</option>
+      </datalist>
+      <button type="submit" :disabled="sending || !input.trim()">확인</button>
+    </form>
+    <p class="hint">흡입·접촉·삼킴 사고가 났다면 이 화면보다 먼저 <a href="tel:119">119</a>에 연락하세요.</p>
+  </footer>
 </div>
 
 <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
 <script>
-const { createApp, ref, reactive, nextTick } = Vue;
+const { createApp, reactive, ref, nextTick, computed } = Vue;
 
-const STEP_LABELS = {
-   PlanCreated: e => `계획 수립: 조사할 물질 ${e.targets?.length || 0}종${e.targets?.length ? ` (${e.targets.join(', ')})` : ''}`
-      + (e.inherited ? ' — 이전 질문의 물질' : '')
-      + (e.intent?.ingest ? ' · ⚠️ 섭취 의도 감지' : '') + (e.intent?.synthesis ? ' · 합성 의도 감지' : ''),
-  GateApplied: e => e.added_analysis_tasks ? '물질 2종 이상 → 혼촉 점검 추가'
-      : (e.removed_analysis_tasks ? `불필요한 작업 ${e.removed_analysis_tasks}건 제거` : null),
-  TaskCompleted: e => (e.source === 'sds'
-      ? `SDS 조회 (물질: ${e.label})${e.found === false ? ' — 정보 없음' : ''}`
-      : `취급 지침 조회 (유형: ${e.label})`) + (e.retries ? ' (재시도 성공)' : ''),
-  ReplanCheck: e => e.is_sufficient ? null : `유해성 유형 확인 → 취급 지침 추가 조사 (${(e.targets || []).join(', ')})`,
-  AnalysisCompleted: e => e.conflicts ? `혼촉 위험 점검: ${e.conflicts}건 발견` : '혼촉 위험 점검: 특이사항 없음',
-  DraftWritten: e => `안내문 초안 작성 (시도 ${e.attempt})`,
-  Validation: e => e.verdict.startsWith('합격') ? '검수 통과' : '검수 반려 → 다시 작성',
-  Finalize: () => '최종 안내문 완성',
-};
+// 처리 단계 — 서버 그래프의 노드 순서와 같다
+const STEPS = ['질문 분류', '계획 수립', '점검 범위 결정', 'SDS 조회', '취급 지침 보충', '혼촉 점검', '안내문 작성', '검수'];
 
-createApp({
+const app = createApp({
   setup() {
-    const backendLabel = ref('chem_safety_agent');
-    const log = ref([]);
+    const turns = ref([]);
     const input = ref('');
     const sending = ref(false);
-    const logEl = ref(null);
-    const thread = 't-web-' + Math.random().toString(36).slice(2, 8);
+    const scrollEl = ref(null);
+    const health = ref(null);
+    const catalog = ref([]);
+    const printId = ref(null);
+    let thread = newThreadId();
     let nextId = 0;
 
-    fetch('/health').then(r => r.json()).then(h => {
-      backendLabel.value = `${h.llm_backend}(${h.fast_llm}/${h.quality_llm}) · 데이터: ${h.chem_data_mode}`;
-    }).catch(() => {});
+    const examples = [
+      { title: '같이 써도 될까', items: ['톨루엔이랑 질산 같이 써도 돼?', '락스랑 염산 섞어도 돼?'] },
+      { title: '한 가지 물질', items: ['수산화나트륨 사용 전 주의할 점', '자일렌 취급 주의사항'] },
+      { title: '실험 상황', items: ['염산과 NaOH로 중화 실험할 거야', '아세톤으로 유리기구 세척할 거야'] },
+    ];
 
-    async function scrollToBottom() {
+    const backend = computed(() => health.value?.llm_backend || '');
+    const statusText = computed(() => health.value
+      ? `${health.value.llm_backend} · 데이터 ${health.value.chem_data_mode}` : '서버 연결 안 됨');
+    const statusTitle = computed(() => health.value
+      ? `LLM: ${health.value.fast_llm} / ${health.value.quality_llm}` : '터미널에서 백엔드(8100)를 먼저 켜세요');
+
+    fetch('/health').then(r => r.json()).then(h => { health.value = h; }).catch(() => {});
+    fetch('/substances').then(r => r.json()).then(d => { catalog.value = d.items || []; }).catch(() => {});
+
+    function newThreadId() { return 't-web-' + Math.random().toString(36).slice(2, 8); }
+    function newChat() { turns.value = []; thread = newThreadId(); input.value = ''; }
+
+    async function scrollDown() {
       await nextTick();
-      if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight;
+      if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
     }
 
-    function onSubmit() {
-      const text = input.value.trim();
-      if (!text) return;
+    // 이벤트 → 단계 번호
+    function stepOf(e) {
+      switch (e.type) {
+        case 'RouteDecided': return 0;
+        case 'PlanCreated': return 1;
+        case 'GateApplied': return 2;
+        case 'TaskCompleted': return e.source === 'sds' ? 3 : 4;
+        case 'ReplanCheck': return e.is_sufficient ? 4 : 3;
+        case 'ResearchSkipped': return 3;
+        case 'AnalysisCompleted': case 'AnalysisSkipped': return 5;
+        case 'DraftWritten': return 6;
+        case 'Validation': return e.verdict.startsWith('합격') ? 7 : 6;
+        default: return -1;
+      }
+    }
+    function logText(e) {
+      switch (e.type) {
+        case 'PlanCreated':
+          return `조사할 물질 ${e.targets.length}종${e.targets.length ? ': ' + e.targets.join(', ') : ''}`
+            + (e.inherited ? ' (앞 질문에서 이어받음)' : '')
+            + (e.intent?.ingest ? ' · 섭취 의도 감지' : '') + (e.intent?.synthesis ? ' · 합성 의도 감지' : '');
+        case 'GateApplied':
+          return e.added_analysis_tasks ? '물질이 2종 이상이라 혼촉 점검 추가'
+            : e.removed_analysis_tasks ? '물질이 1종이라 혼촉 점검 생략' : '혼촉 점검 범위 확인';
+        case 'TaskCompleted':
+          return e.source === 'sds'
+            ? `${e.label} SDS 조회${e.found === false ? ' — 정보 없음' : ''}${e.retries ? ' (재시도 성공)' : ''}`
+            : `${e.label} 취급 지침 조회`;
+        case 'ReplanCheck': return e.is_sufficient ? '수집 정보 충분' : `유해성 유형 확인 → 지침 보충: ${(e.targets || []).join(', ')}`;
+        case 'AnalysisCompleted': return e.conflicts ? `혼촉 위험 ${e.conflicts}건 발견` : '규칙상 혼촉 위험 없음';
+        case 'DraftWritten': return `안내문 초안 작성 (${e.attempt}번째)`;
+        case 'Validation': return e.verdict.startsWith('합격') ? '검수 통과' : '검수 반려: ' + (e.problems || []).slice(0, 2).join(' / ');
+        default: return null;
+      }
+    }
+    function stepClass(t, i) {
+      if (t.done.has(i)) return 'done';
+      return !t.finished && i === activeStep(t) ? 'active' : '';
+    }
+    function activeStep(t) { return t.done.size ? Math.max(...t.done) + 1 : 0; }
 
-      log.value.push({ id: nextId++, kind: 'user', text });
+    function send(text) {
+      text = (text || '').trim();
+      if (!text || sending.value) return;
       input.value = '';
       sending.value = true;
-      scrollToBottom();
-
-      const stepsItem = reactive({ id: nextId++, kind: 'steps', steps: [], done: false });
-      log.value.push(stepsItem);
-      scrollToBottom();
+      const t = reactive({ id: nextId++, question: text, route: null, done: new Set(), log: [], drafts: [],
+                           reply: '', notice: null, finished: false, showLog: false, copied: false,
+                           started: performance.now(), elapsed: 0 });
+      turns.value.push(t);
+      scrollDown();
 
       const url = `/chat/stream?message=${encodeURIComponent(text)}&thread_id=${encodeURIComponent(thread)}`;
       const es = new EventSource(url);
-      let streamItem = null;
-      let streamAttempt = null;   // write_node 재작성(attempt 증가) 시 새 말풍선으로 끊는다
-
       es.onmessage = (event) => {
-        if (event.data === '[DONE]') { es.close(); sending.value = false; stepsItem.done = true; return; }
-        let e;
-        try { e = JSON.parse(event.data); } catch { return; }
-
+        if (event.data === '[DONE]') { finish(t); es.close(); return; }
+        let e; try { e = JSON.parse(event.data); } catch { return; }
+        if (e.type === 'RouteDecided') t.route = e.route;
         if (e.type === 'AnswerToken') {
-          if (!streamItem || streamAttempt !== e.attempt) {
-            streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
-            log.value.push(streamItem);
-            streamAttempt = e.attempt;
-          }
-          streamItem.text += e.delta;
-          scrollToBottom();
+          let d = t.drafts.find(x => x.attempt === (e.attempt || 1));
+          if (!d) { d = { attempt: e.attempt || 1, text: '' }; t.drafts.push(d); }
+          d.text += e.delta;
+          scrollDown();
           return;
         }
-
-        if (e.type === 'FinalAnswer') {
-          if (!streamItem) {
-            streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
-            log.value.push(streamItem);
-          }
-          streamItem.text = e.reply;   // 토큰 합산 결과와 서버의 최종 텍스트를 일치시킨다
-          if (e.prompt) log.value.push({ id: nextId++, kind: 'prompt', text: e.prompt });
-          streamItem = null;
-          streamAttempt = null;
-          scrollToBottom();
-          return;
-        }
-
-        const fn = STEP_LABELS[e.type];
-        if (!fn) return;
-        const label = fn(e);
-        if (!label) return;
-        stepsItem.steps.push(label);
-        scrollToBottom();
+        if (e.type === 'FinalAnswer') { t.reply = e.reply; t.notice = e.notice || null; return; }
+        const s = stepOf(e);
+        if (s >= 0) { for (let i = 0; i <= s; i++) t.done.add(i); }
+        const l = logText(e);
+        if (l) t.log.push(l);
+        scrollDown();
       };
-
-      es.onerror = () => { es.close(); sending.value = false; };
+      es.onerror = () => {
+        es.close();
+        if (!t.finished) {
+          t.reply = t.reply || '서버에서 응답을 받지 못했습니다. 백엔드(터미널 ①)가 켜져 있는지 확인하고 다시 보내 주세요.';
+          t.route = t.route || 'chat';
+          finish(t);
+        }
+      };
+    }
+    function finish(t) {
+      if (t.finished) return;
+      t.finished = true;
+      STEPS.forEach((_, i) => t.done.add(i));
+      t.elapsed = ((performance.now() - t.started) / 1000).toFixed(1);
+      sending.value = false;
+      scrollDown();
     }
 
-    return { backendLabel, log, input, sending, logEl, onSubmit };
+    function warnings(n) {
+      const out = [];
+      if (n.intent?.ingest) out.push({ kind: 'danger', title: '마시거나 먹으면 안 됩니다',
+        body: '이미 삼켰다면 구토를 유도하지 말고 바로 119에 연락하세요. 스스로를 해치려는 생각이 든다면 자살예방상담전화 109에서 24시간 이야기를 들어줍니다.' });
+      if (n.intent?.synthesis) out.push({ kind: 'caution', title: '합성 절차는 안내하지 않습니다',
+        body: '아래는 해당 물질을 다룰 때의 안전 정보입니다. 합성은 지도교수·안전관리자의 승인과 검증된 절차서에 따라 진행하세요.'
+          + (n.substances.some(s => (s.pictograms || []).some(p => p.code === 'GHS01')) ? ' 폭발성 물질은 허가 없이 제조할 수 없습니다.' : '') });
+      return out;
+    }
+    function pairs(n) {
+      const names = n.substances.map(s => s.name);
+      const out = [];
+      for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+        const a = names[i], b = names[j];
+        const hit = n.conflicts.find(c => c.pair.includes(a) && c.pair.includes(b));
+        const unk = n.unknown_mix.includes(a) || n.unknown_mix.includes(b);
+        if (hit) out.push({ key: a + b, kind: 'bad', mark: '위험', names: `${a} + ${b}`,
+                            lines: [...hit.warnings.map(w => w + '.'), ...hit.advice.map(x => '→ ' + x + '.')] });
+        else if (unk) out.push({ key: a + b, kind: 'unk', mark: '불가', names: `${a} + ${b}`,
+                                 lines: ['물질을 확인하지 못해 점검할 수 없습니다.', '→ 함께 쓰기 전에 SDS 10항(안정성 및 반응성)을 확인하세요.'] });
+        else out.push({ key: a + b, kind: 'ok', mark: '확인', names: `${a} + ${b}`,
+                        lines: ['등록된 혼촉 규칙에서는 위험이 확인되지 않았습니다.', '→ 규칙에 없는 조합일 수 있으니 SDS 10항도 확인하세요.'] });
+      }
+      return out;
+    }
+    function sources(n) {
+      const out = [];
+      n.substances.filter(s => s.found).forEach(s => {
+        if (s.source_url) out.push({ text: `PubChem (${s.name})`, href: s.source_url });
+        else if (s.source === 'sample') out.push({ text: `샘플 데이터 (${s.name})` });
+      });
+      return out.length ? out : [{ text: '조회된 자료 없음' }];
+    }
+    function signalClass(s) { return /위험|danger/i.test(s) ? 'danger' : 'warning'; }
+    function signalText(s) { return /위험|danger/i.test(s) ? '위험' : /경고|warning/i.test(s) ? '경고' : s; }
+
+    async function copy(t) {
+      try { await navigator.clipboard.writeText(t.reply); }
+      catch {
+        const ta = document.createElement('textarea'); ta.value = t.reply; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      t.copied = true; setTimeout(() => { t.copied = false; }, 1500);
+    }
+    async function print(t) {
+      printId.value = t.id;
+      await nextTick();
+      window.print();
+    }
+
+    return { STEPS, turns, input, sending, scrollEl, health, catalog, examples, backend, statusText, statusTitle,
+             printId, send, newChat, stepClass, activeStep, warnings, pairs, sources, signalClass, signalText, copy, print };
   },
-}).mount('#app');
+});
+
+// GHS 그림문자 — 빨간 테두리 마름모 안에 단순화한 기호
+app.component('ghs-pic', {
+  props: ['code'],
+  template: `
+  <svg viewBox="0 0 100 100" role="img" :aria-label="code">
+    <polygon points="50,5 95,50 50,95 5,50" :fill="code === 'unknown' ? '#EEF1F4' : '#fff'"
+             :stroke="code === 'unknown' ? '#9AA5AF' : '#CF1820'" stroke-width="7" stroke-linejoin="round"/>
+    <g fill="#1A1E23" stroke="#1A1E23" stroke-linecap="round" stroke-linejoin="round">
+      <template v-if="code === 'GHS01'">
+        <circle cx="50" cy="60" r="10" stroke="none"/>
+        <path d="M50 26v12M34 34l7 8M66 34l-7 8M28 52h10M62 52h10" fill="none" stroke-width="5"/>
+      </template>
+      <template v-else-if="code === 'GHS02'">
+        <path d="M50 24c8 12 16 18 13 32-2 9-8 13-13 13s-12-4-12-13c0-8 6-12 8-19 2 6 6 8 8 6 2-6-2-13-4-19z" stroke="none"/>
+        <rect x="32" y="72" width="36" height="5" rx="2" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS03'">
+        <circle cx="50" cy="62" r="11" fill="none" stroke-width="6"/>
+        <path d="M50 26c5 7 9 11 7 18-1 4-4 6-7 6s-7-2-7-6c0-5 3-7 4-10 1 3 3 4 4 3 1-4-1-7-1-11z" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS04'">
+        <rect x="38" y="30" width="24" height="42" rx="10" stroke="none"/>
+        <rect x="45" y="24" width="10" height="8" rx="2" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS05'">
+        <path d="M30 30l14 10M56 30l14 10" stroke-width="6" fill="none"/>
+        <path d="M44 46c0 6-4 8-4 11a4 4 0 0 0 8 0c0-3-4-5-4-11zM68 46c0 6-4 8-4 11a4 4 0 0 0 8 0c0-3-4-5-4-11z" stroke="none"/>
+        <rect x="30" y="66" width="18" height="6" rx="2" stroke="none"/>
+        <path d="M58 66h14v6h-6l-3 3-2-3h-3z" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS06'">
+        <circle cx="50" cy="42" r="15" stroke="none"/>
+        <rect x="42" y="52" width="16" height="9" rx="2" stroke="none"/>
+        <circle cx="44" cy="41" r="4" fill="#fff" stroke="none"/><circle cx="56" cy="41" r="4" fill="#fff" stroke="none"/>
+        <path d="M32 64l36 12M68 64L32 76" stroke-width="6" fill="none"/>
+      </template>
+      <template v-else-if="code === 'GHS07'">
+        <rect x="45" y="26" width="10" height="32" rx="4" stroke="none"/>
+        <circle cx="50" cy="69" r="6" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS08'">
+        <circle cx="50" cy="30" r="7" stroke="none"/>
+        <path d="M36 74c0-18 4-34 14-34s14 16 14 34z" stroke="none"/>
+        <path d="M50 50l3 6 6 1-4 4 1 6-6-3-6 3 1-6-4-4 6-1z" fill="#fff" stroke="none"/>
+      </template>
+      <template v-else-if="code === 'GHS09'">
+        <path d="M34 66l10-30 10 30z" stroke="none"/>
+        <path d="M54 62c6-6 14-6 18 0-4 6-12 6-18 0zM54 62l-4-4v8z" stroke="none"/>
+        <path d="M28 72h44" stroke-width="4" fill="none"/>
+      </template>
+      <template v-else>
+        <text x="50" y="62" text-anchor="middle" font-size="34" font-weight="700" fill="#9AA5AF" stroke="none">?</text>
+      </template>
+    </g>
+  </svg>`,
+});
+
+app.mount('#app');
 </script>
 </body>
 </html>

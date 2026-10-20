@@ -272,6 +272,49 @@ def is_explosive(sds_list: list[dict]) -> bool:
     return any("explosive" in _traits(s) for s in sds_list)
 
 
+# ── 화면 표시용 ──────────────────────────────────────────────────────
+# GHS 그림문자 코드와 한국어 이름. PubChem은 영어 라벨("Flammable")로, 샘플은 "GHS02 인화성"으로 준다.
+PICTOGRAMS = {
+    "GHS01": "폭발성", "GHS02": "인화성", "GHS03": "산화성", "GHS04": "고압가스",
+    "GHS05": "부식성", "GHS06": "급성 독성", "GHS07": "경고", "GHS08": "건강 유해성",
+    "GHS09": "수생환경 유해성",
+}
+_PUBCHEM_PICTOGRAMS = {
+    "explosive": "GHS01", "flammable": "GHS02", "oxidizer": "GHS03", "compressed gas": "GHS04",
+    "corrosive": "GHS05", "acute toxic": "GHS06", "irritant": "GHS07", "health hazard": "GHS08",
+    "environmental hazard": "GHS09",
+}
+
+
+def pictogram_codes(labels: list[str]) -> list[str]:
+    codes = []
+    for label in labels or []:
+        m = re.match(r"(GHS0\d)", label.strip())
+        code = m.group(1) if m else _PUBCHEM_PICTOGRAMS.get(label.strip().lower())
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def catalog_list() -> list[dict]:
+    """자동완성용 물질 목록 — 샘플 6종이 먼저, 그다음 이름 사전."""
+    items = []
+    for sid, s in sorted(CATALOG.items(), key=lambda kv: (kv[0] not in SUBSTANCES, kv[1].get("name_ko") or "")):
+        items.append({"key": sid, "name_ko": s.get("name_ko"), "name_en": s.get("name_en"),
+                      "cas": s.get("cas"), "sample": sid in SUBSTANCES})
+    return items
+
+
+def abbr_candidates(name: str) -> list[dict]:
+    """여러 뜻이 있는 약어의 후보를 화면에서 버튼으로 다시 물을 수 있게 이름·CAS로 나눈다."""
+    out = []
+    for text in AMBIGUOUS_ABBR.get((name or "").upper(), []):
+        m = re.search(r"CAS (\d{2,7}-\d{2}-\d)", text)
+        out.append({"label": re.sub(r"\s*\(.*\)$", "", text), "cas": m.group(1) if m else None,
+                     "detail": text})
+    return out
+
+
 def ppe_for(sds_list: list[dict]) -> list[str]:
     """공통 보호구 + 확인된 유해성 유형별 추가 보호구 (유형 이름을 붙여 읽기 쉽게)."""
     traits = set().union(*(_traits(s) for s in sds_list if s.get("found"))) if sds_list else set()

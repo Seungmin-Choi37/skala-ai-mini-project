@@ -101,6 +101,13 @@ async def health():
             "quality_llm": app.state.deps.quality_llm.name}
 
 
+@app.get("/substances")
+async def substances():
+    """화면 자동완성용 — 이름 사전과 샘플에 등록된 물질 목록."""
+    from agent.chem_rules import catalog_list
+    return {"items": catalog_list()}
+
+
 @app.get("/version")
 async def version():
     return {"supervisor_version": app.state.deps.version}
@@ -142,8 +149,8 @@ async def _handle_chat(message: str, thread_id: str) -> tuple[dict, str | None]:
 @app.post("/chat")
 async def chat(req: ChatRequest):
     result, run_id = await _handle_chat(req.message, req.thread_id)
-    return {"reply": result["final"], "events": result.get("events", []),
-            "metadata": _metadata(result, run_id)}
+    return {"reply": result["final"], "notice": result.get("notice"),
+            "events": result.get("events", []), "metadata": _metadata(result, run_id)}
 
 
 @app.get("/chat/stream")
@@ -168,6 +175,7 @@ async def chat_stream(message: str, thread_id: str = "default"):
         else:
             seen = 0
             final = ""
+            notice = None
             last_prompt = None   # finalize까지 살아남은 최종 write/chat 호출의 실제 프롬프트
             # stream_mode를 리스트로 주면 (mode, payload) 튜플이 나온다 — "updates"는
             # 노드가 끝날 때마다의 상태 델타, "custom"은 write_node/chat_answer_node가
@@ -188,7 +196,9 @@ async def chat_stream(message: str, thread_id: str = "default"):
                         final = delta["final"]
                     if delta.get("last_prompt"):
                         last_prompt = delta["last_prompt"]
-            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': final, 'prompt': last_prompt}, ensure_ascii=False)}\n\n"
+                    if delta.get("notice"):
+                        notice = delta["notice"]
+            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': final, 'prompt': last_prompt, 'notice': notice}, ensure_ascii=False)}\n\n"
             deps.session_store.append(thread_id, "user", message)
             deps.session_store.append(thread_id, "assistant", final)
         yield "data: [DONE]\n\n"

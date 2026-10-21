@@ -1,6 +1,7 @@
 """LLM_BACKEND=openai — 실제 OpenAI API 백엔드 (fake_llm/ollama_llm과 동일 인터페이스).
 
-fast(기본 gpt-4o-mini)는 분류·계획·단순 대화, quality(기본 gpt-4o)는 안내문 작성 전담.
+fast(기본 gpt-4o-mini)는 분류·계획·단순 대화, quality(기본 gpt-4o)는 안내문 작성과
+일반 화학 질문(knowledge) 답변 전담.
 ⚠️ 실제 과금이 발생하는 원격 API다.
 
 - 모든 호출은 httpx.AsyncClient로 한다 — 응답을 기다리는 동안 서버의 다른 요청이 멈추지 않는다.
@@ -17,7 +18,7 @@ import os
 import httpx
 from langsmith import traceable
 
-from . import prompts
+from . import chem_rules, prompts
 
 OPENAI_URL = os.environ.get("OPENAI_URL", "https://api.openai.com/v1/chat/completions")
 
@@ -100,7 +101,7 @@ class OpenAIFastLLM(OpenAILLM):
         content, usage = await self._chat(system, query, json_mode=True)
         try:
             raw = json.loads(content)
-            route = raw.get("route") if raw.get("route") in ("chat", "safety") else None
+            route = raw.get("route") if raw.get("route") in prompts.ROUTES else None
             result = {"route": route or prompts.keyword_route(query),
                       "needs_analysis": bool(raw.get("needs_analysis", False))}
         except (json.JSONDecodeError, AttributeError):
@@ -118,6 +119,17 @@ class OpenAIFastLLM(OpenAILLM):
             raw = {"needs_analysis": False, "tasks": []}
         return prompts.normalize_plan(raw, query), usage
 
+    @traceable(run_type="llm", name="openai_fast.suggest")
+    async def suggest(self, query: str, prop: str) -> tuple[list[dict], dict]:
+        spec = chem_rules.PROPERTY_QUERIES[prop]
+        system = prompts.suggest_system(spec["label"], spec["codes"]) + " " + prompts.SUGGEST_JSON_HINT
+        content, usage = await self._chat(system, query, json_mode=True)
+        try:
+            raw = json.loads(content)
+        except json.JSONDecodeError:
+            raw = {}
+        return prompts.normalize_candidates(raw), usage
+
     @traceable(run_type="llm", name="openai_fast.chat")
     async def chat(self, query: str, history: list[dict], on_token=None) -> tuple[str, dict]:
         user = prompts.chat_user(query, history)
@@ -132,3 +144,15 @@ class OpenAIQualityLLM(OpenAILLM):
                     feedback: str | None, on_token=None) -> tuple[str, dict]:
         user = prompts.write_user(query, collected, feedback)
         return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)
+
+    @traceable(run_type="llm", name="openai_quality.answer")
+    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
+        """일반 화학 질문 — 설명과 언급한 물질(CAS)을 JSON 모드로 받는다."""
+        system = prompts.KNOWLEDGE_SYSTEM + " " + prompts.KNOWLEDGE_JSON_HINT
+        content, usage = await self._chat(system, prompts.knowledge_user(query, history, feedback),
+                                          json_mode=True)
+        try:
+            raw = json.loads(content)
+        except json.JSONDecodeError:
+            raw = {}
+        return prompts.normalize_knowledge(raw), usage

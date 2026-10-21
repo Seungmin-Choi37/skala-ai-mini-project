@@ -1,11 +1,18 @@
 """v2 Supervisor — 화학물질 사용 전 안전 안내 LangGraph StateGraph.
 
-route → (chat 직행 | safety 파이프라인)
-safety: plan(MCP Prompt 절차 반영) → gate(혼촉 점검 필요 여부를 코드가 결정)
-        → research(SDS Tool·지침 Resource 병렬 조회 + 재시도)
-        → replan_check(지침이 없으면 GHS 유해성 유형을 판정해 지침 추가 조사)
-        → analysis(물질 2종 이상일 때 혼촉 규칙 판정) → write
-        → validate(형식·필수 문구 + 근거 없는 수치·H코드 검사, 반려 시 재작성) → finalize
+route(LLM 분류 + 코드 최종 결정) → 네 갈래
+  chat      : 인사·잡담·무관한 질문 → chat_answer
+  category  : 성질로 물질 찾기("자연발화하는 것은?")
+              category_suggest(LLM 후보) → category_verify(성질의 H코드가 SDS에 있는 물질만)
+  knowledge : 물질 이름 없는 일반 화학 질문("흡습성 물질은?")
+              knowledge_answer(LLM 설명 + 언급 물질) → knowledge_review(수치·H코드 점검, 반려 시 재작성)
+              → knowledge_verify(언급 물질 SDS 확인) → knowledge_finalize
+  safety    : 특정 물질 사용 전 안내
+              plan(MCP Prompt 절차 반영) → gate(혼촉 점검 필요 여부를 코드가 결정)
+              → research(SDS Tool·지침 Resource 병렬 조회 + 재시도)
+              → replan_check(지침이 없으면 GHS 유해성 유형을 판정해 지침 추가 조사)
+              → analysis(물질 2종 이상일 때 혼촉 규칙 판정) → write
+              → validate(형식·필수 문구 + 근거 없는 수치·H코드 검사, 반려 시 재작성) → finalize
 
 모든 노드는 SupervisorDeps를 functools.partial로 주입받는 순수 함수다.
 각 노드는 @traceable로 LangSmith에 계층 트리로 기록된다.
@@ -21,9 +28,9 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langsmith import traceable
 
-from . import chem_rules
+from . import chem_rules, prompts
 from .deps import SupervisorDeps
-from .prompts import keyword_route
+from .prompts import FOLLOW_UP, SAFETY_KEYWORDS, keyword_route
 from .retry import with_retry
 
 REQUIRED_SECTIONS = ["유해성", "보호구", "취급", "혼용", "응급", "보관"]
@@ -51,6 +58,13 @@ class AgentState(TypedDict, total=False):
     conflicts: list[dict]
     unknown_mix: list[str]
     notice: dict
+    property: str
+    candidates: list[dict]
+    knowledge: dict
+    knowledge_attempts: int
+    knowledge_feedback: str
+    unverified: list[str]
+    checked: list[dict]
 
 
 def _cost(state: AgentState, usage: dict) -> float:
@@ -65,17 +79,47 @@ def _sds(state: AgentState) -> list[dict]:
     return [c["data"] for c in state.get("collected", []) if c["source"] == "sds"]
 
 
+def history_targets(history: list[dict]) -> list[dict]:
+    """최근 사용자 질문에서 물질을 찾는다 — "그럼 보관은?" 같은 후속 질문이 이어받는다."""
+    for msg in reversed((history or [])[-6:]):
+        if msg.get("role") != "user":
+            continue
+        prev = chem_rules.extract_targets(msg.get("content", ""))
+        if prev:
+            return prev
+    return []
+
+
+def decide_route(query: str, history: list[dict], llm_route: str) -> str:
+    """최종 경로는 코드가 정한다 — LLM 분류는 참고만 한다.
+
+    1) 성질 + 목록 질문("자연발화하는 것은?")            → category (H코드로 엄격히 확인)
+    2) 물질 이름·CAS가 보임                              → safety (사용 전 안내 파이프라인)
+    3) 짧은 후속 질문 + 앞 질문에 물질("그럼 보관은?")   → safety (물질 이어받기)
+    4) LLM이 화학 질문이라 했거나 화학·안전 표현이 보임  → knowledge (일반 화학 지식)
+    5) 나머지(인사·잡담·무관한 질문)                     → chat
+    안전 우선: 모델이 chat이라 해도 물질 이름이 보이면 safety로 보낸다. 위험한 질문을 잡담으로
+    흘려보내는 쪽의 실수가 반대쪽보다 훨씬 크기 때문이다."""
+    if chem_rules.detect_property(query):
+        return "category"
+    if chem_rules.extract_targets(query):
+        return "safety"
+    follow_up = SAFETY_KEYWORDS.search(query) and (FOLLOW_UP.match(query) or len(query.strip()) <= 12)
+    if follow_up and history_targets(history):
+        return "safety"
+    if llm_route in ("safety", "knowledge") or keyword_route(query) == "knowledge":
+        return "knowledge"
+    return "chat"
+
+
 @traceable(name="route_node")
 async def route_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """모든 질문이 무거운 파이프라인을 탈 필요는 없다 — 인사·잡담은 바로 답한다."""
+    """모든 질문이 무거운 파이프라인을 탈 필요는 없다 — 질문 종류에 따라 네 갈래로 보낸다."""
     result, usage = await deps.fast_llm.route(state["query"])
-    route = result["route"]
-    event = {"type": "RouteDecided", "route": route}
-    # 안전 우선 — 모델이 chat이라 해도 물질 이름이나 안전 키워드가 보이면 safety로 보낸다.
-    # 위험한 질문을 잡담으로 흘려보내는 쪽의 실수가 반대쪽보다 훨씬 크기 때문이다.
-    if route == "chat" and keyword_route(state["query"]) == "safety":
-        route = "safety"
-        event = {"type": "RouteDecided", "route": route, "overridden": True}
+    llm_route = result["route"]
+    route = decide_route(state["query"], state.get("history", []), llm_route)
+    event = {"type": "RouteDecided", "route": route, "llm_route": llm_route,
+             "overridden": route != llm_route}
     return {"route": route, "needs_analysis": result["needs_analysis"],
             "cost_usd": _cost(state, usage),
             "events": state.get("events", []) + [event]}
@@ -91,6 +135,193 @@ async def chat_answer_node(state: AgentState, deps: SupervisorDeps) -> dict:
     return {"final": reply, "last_prompt": usage.get("prompt"),
             "cost_usd": _cost(state, usage),
             "events": state["events"] + [{"type": "Finalize", "pipeline": "chat-direct"}]}
+
+
+async def _lookup_all(deps: SupervisorDeps, items: list[dict]) -> list[tuple[dict, dict, int]]:
+    """CAS 목록을 병렬로 SDS 조회한다 (KOSHA → PubChem → 샘플, 일시 오류 재시도)."""
+    async def one(c: dict):
+        data, retries = await with_retry(deps.mcp.call_tool, "get_substance_safety",
+                                         {"name": c["cas"], "lookup": c["cas"]})
+        return c, data, retries
+    return list(await asyncio.gather(*(one(c) for c in items)))
+
+
+# ── 성질로 물질 찾기: category_suggest(LLM 후보) → category_verify(SDS로 확인) ──
+@traceable(name="category_suggest_node")
+async def category_suggest_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """LLM이 후보(한국어명·CAS)를 제안한다. CAS 검증 숫자가 틀린 것은 prompts에서 이미 버려진다.
+    후보가 3개 미만이면 코드에 정해 둔 기본 후보로 채운다. 모델 오류여도 기본 후보로 계속한다."""
+    query = state["query"]
+    prop = chem_rules.detect_property(query)
+    spec = chem_rules.PROPERTY_QUERIES[prop]
+    events = list(state["events"])
+    try:
+        suggested, usage = await deps.fast_llm.suggest(query, prop)
+    except Exception as exc:
+        suggested, usage = [], {"usd": 0.0}
+        events.append({"type": "SuggestFailed", "reason": type(exc).__name__})
+    candidates = list(suggested)
+    seeds_added = 0
+    if len(candidates) < 3:
+        for name, cas in spec["seeds"]:
+            if all(c["cas"] != cas for c in candidates):
+                candidates.append({"name": name, "cas": cas})
+                seeds_added += 1
+    candidates = candidates[:8]
+    events.append({"type": "CategoryPlanned", "property": spec["label"], "codes": spec["codes"],
+                   "candidates": len(candidates), "from_llm": len(suggested), "seeds_added": seeds_added})
+    return {"property": prop, "candidates": candidates, "cost_usd": _cost(state, usage), "events": events}
+
+
+@traceable(name="category_verify_node")
+async def category_verify_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """후보마다 SDS를 조회해, 그 성질을 증명하는 GHS 코드(자연발화성이면 H250)가 실제 자료에 있는
+    물질만 '확인됨'으로 남긴다. 안내문도 LLM이 아니라 코드가 조립한다 — 확인된 사실만 쓰기 위해서다."""
+    spec = chem_rules.PROPERTY_QUERIES[state["property"]]
+    events = list(state["events"])
+    confirmed, unconfirmed = [], []
+    retry_total = state.get("retry_count", 0)
+    for c, data, retries in await _lookup_all(deps, state["candidates"]):
+        retry_total += retries
+        statement = chem_rules.has_codes(data, spec["codes"])
+        if statement:
+            # 화면에 쓰는 이름은 모델 제안이 아니라 자료(이름 사전·KOSHA·PubChem)에서 가져온다
+            name = data.get("name_ko") or data.get("name_en") or c["cas"]
+            confirmed.append({"name": name, "cas": c["cas"], "statement": statement,
+                              "source": data.get("source"), "source_url": data.get("source_url")})
+        else:
+            reason = ("자료에 " + "·".join(spec["codes"]) + " 분류가 없음") if data.get("found") \
+                else (data.get("reason") or "조회 실패")
+            unconfirmed.append({"name": c["name"], "cas": c["cas"], "reason": reason})
+        events.append({"type": "TaskCompleted", "source": "sds", "target": c["cas"],
+                       "label": (data.get("name_ko") or c["name"]), "confirmed": bool(statement),
+                       "retries": retries, "data_source": data.get("source")})
+    events.append({"type": "CategoryChecked", "confirmed": len(confirmed), "unconfirmed": len(unconfirmed)})
+    events.append({"type": "Finalize", "pipeline": "category"})
+    notice = {"kind": "category", "property": spec["label"], "codes": spec["codes"],
+              "confirmed": confirmed, "unconfirmed": unconfirmed, "intent": {}}
+    return {"final": compose_category(spec, confirmed, unconfirmed), "notice": notice,
+            "retry_count": retry_total, "events": events}
+
+
+_SOURCE_NAMES = {"kosha": "안전보건공단 MSDS", "pubchem": "PubChem", "sample": "샘플 데이터"}
+
+
+def compose_category(spec: dict, confirmed: list[dict], unconfirmed: list[dict]) -> str:
+    codes = "·".join(spec["codes"])
+    out = [f"[성질로 찾기] {spec['label']} (GHS {codes})"]
+    if confirmed:
+        out.append("SDS 자료에서 확인된 물질:")
+        for c in confirmed:
+            out.append(f"- {c['name']} (CAS {c['cas']}): {c['statement']} — 출처 {_SOURCE_NAMES.get(c['source'], c['source'])}")
+    else:
+        out.append("SDS 자료에서 이 분류가 확인된 물질이 없습니다. 인터넷 연결이나 데이터 모드(sample)를 확인하세요.")
+    if unconfirmed:
+        out.append("후보였지만 자료로 확인하지 못한 물질(추측이므로 안내하지 않음): " +
+                   ", ".join(f"{u['name']}(CAS {u['cas']})" for u in unconfirmed))
+    out.append("각 물질의 자세한 주의사항은 이름이나 CAS 번호로 다시 물어보세요. "
+               "실제 사용 전 공식 SDS(KOSHA MSDS·제조사 SDS)로 반드시 확인하세요.")
+    return "\n".join(out)
+
+
+# ── 일반 화학 질문: knowledge_answer → knowledge_review ─(반려, 최대 2회)─▶ knowledge_answer
+#                                                    └─▶ knowledge_verify(물질 SDS 확인) → knowledge_finalize
+KNOWLEDGE_MAX_ATTEMPTS = 2
+
+
+@traceable(name="knowledge_answer_node")
+async def knowledge_answer_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """고품질 모델이 일반 화학 지식으로 답하고, 답에서 언급한 물질(CAS)을 함께 낸다."""
+    attempt = state.get("knowledge_attempts", 0) + 1
+    result, usage = await deps.quality_llm.answer(
+        state["query"], state.get("history", []), state.get("knowledge_feedback"))
+    event = {"type": "KnowledgeAnswered", "attempt": attempt, "substances": len(result["substances"])}
+    return {"knowledge": result, "knowledge_attempts": attempt, "last_prompt": usage.get("prompt"),
+            "cost_usd": _cost(state, usage), "events": state["events"] + [event]}
+
+
+def check_knowledge(answer: str) -> tuple[list[str], list[str], list[str]]:
+    """일반 지식 답 점검 — (반려 사유, 확인 안 된 수치, 확인 안 된 H코드).
+    일반 지식 답에는 근거 자료가 없으므로, 단위가 붙은 수치와 H코드는 모두 '확인 안 됨'이다."""
+    numbers, codes = ungrounded(answer, "")
+    problems = []
+    if not answer.strip():
+        problems.append("답이 비어 있습니다")
+    if numbers:
+        problems.append(f"SDS로 확인하지 않은 수치가 있습니다({', '.join(numbers)}) — 수치는 빼세요")
+    if codes:
+        problems.append(f"SDS로 확인하지 않은 H코드가 있습니다({', '.join(codes)}) — 코드는 빼세요")
+    return problems, numbers, codes
+
+
+@traceable(name="knowledge_review_node")
+async def knowledge_review_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """코드 점검 — 빈 답, 안전 수치(°C·%·ppm 등), H코드가 있으면 반려해 다시 쓰게 한다(최대 2회).
+    끝까지 남은 수치·코드는 지우지 않고 화면에 '확인 안 됨' 경고를 붙인다."""
+    attempt = state.get("knowledge_attempts", 1)
+    problems, numbers, codes = check_knowledge(state["knowledge"]["answer"])
+    retry = bool(problems) and attempt < KNOWLEDGE_MAX_ATTEMPTS
+    feedback = ("점검 반려: " + "; ".join(problems)) if retry else None
+    event = {"type": "KnowledgeReviewed", "attempt": attempt, "ok": not problems,
+             "retry": retry, "problems": problems}
+    return {"knowledge_feedback": feedback, "unverified": numbers + codes,
+            "events": state["events"] + [event]}
+
+
+@traceable(name="knowledge_verify_node")
+async def knowledge_verify_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """답에 나온 물질을 병렬로 SDS 조회한다 — 모델이 말한 물질이 실제로 있는지, 어떤 신호어인지."""
+    events = list(state["events"])
+    checked = []
+    retry_total = state.get("retry_count", 0)
+    for c, data, retries in await _lookup_all(deps, state["knowledge"]["substances"]):
+        retry_total += retries
+        found = bool(data.get("found"))
+        checked.append({"name": (data.get("name_ko") or data.get("name_en") or c["name"]) if found else c["name"],
+                        "cas": c["cas"], "found": found, "signal": data.get("signal_word") if found else None,
+                        "source": data.get("source") if found else None,
+                        "source_url": data.get("source_url") if found else None,
+                        "reason": None if found else (data.get("reason") or "조회 실패")})
+        events.append({"type": "TaskCompleted", "source": "sds", "target": c["cas"],
+                       "label": checked[-1]["name"], "found": found, "retries": retries,
+                       "data_source": data.get("source")})
+    events.append({"type": "KnowledgeChecked", "confirmed": sum(c["found"] for c in checked),
+                   "unconfirmed": sum(not c["found"] for c in checked)})
+    return {"checked": checked, "retry_count": retry_total, "events": events}
+
+
+def compose_knowledge(answer: str, checked: list[dict], unverified: list[str], intent: dict) -> str:
+    out = prompts.intent_warnings(intent, [])
+    out += ["[일반 화학 지식] SDS로 확인한 내용이 아닙니다", answer]
+    if unverified:
+        out.append(f"⚠️ 답에 SDS로 확인하지 않은 값이 있습니다({', '.join(unverified)}) — "
+                   "사용 전 공식 SDS로 확인하세요.")
+    if checked:
+        out.append("답에 나온 물질의 SDS 확인:")
+        for c in checked:
+            if c["found"]:
+                out.append(f"- {c['name']} (CAS {c['cas']}): SDS 확인됨 — 출처 "
+                           f"{_SOURCE_NAMES.get(c['source'], c['source'])}")
+            else:
+                out.append(f"- {c['name']} (CAS {c['cas']}): SDS 확인 못 함 ({c['reason']})")
+        out.append("각 물질의 자세한 주의사항은 이름이나 CAS 번호로 다시 물어보세요.")
+    return "\n".join(out)
+
+
+@traceable(name="knowledge_finalize_node")
+async def knowledge_finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """답·경고·물질 확인 결과를 코드가 합친다. 모른다는 답이면 일반 대화처럼 그 문장만 보낸다."""
+    answer = state["knowledge"]["answer"] or prompts.UNKNOWN_REPLY
+    events = state["events"] + [{"type": "Finalize", "pipeline": "knowledge"}]
+    if answer.startswith("알 수 없습니다"):
+        return {"final": answer, "events": events}
+    intent = chem_rules.detect_intent(state["query"])
+    checked = state.get("checked", [])
+    unverified = state.get("unverified", [])
+    notice = {"kind": "knowledge", "answer": answer, "substances": checked,
+              "unverified": unverified, "intent": intent}
+    return {"final": compose_knowledge(answer, checked, unverified, intent), "notice": notice,
+            "events": events}
 
 
 @traceable(name="plan_node")
@@ -113,16 +344,12 @@ async def plan_node(state: AgentState, deps: SupervisorDeps) -> dict:
     # 후속 질문("그럼 보관은?")처럼 이번 질문에 물질이 없으면, 최근 사용자 질문에서 물질을 이어받는다
     inherited = False
     if not any(t["agent"] == "research" for t in tasks):
-        for msg in reversed(state.get("history", [])[-6:]):
-            if msg.get("role") != "user":
-                continue
-            prev = chem_rules.extract_targets(msg.get("content", ""))
-            if prev:
-                tasks = [{"id": f"task-{i}", "agent": "research", "kind": "sds",
-                          "target": t["target"], "label": t["label"], "lookup": t["lookup"] or "",
-                          "status": "pending"} for i, t in enumerate(prev)] + tasks
-                inherited = True
-                break
+        prev = history_targets(state.get("history", []))
+        if prev:
+            tasks = [{"id": f"task-{i}", "agent": "research", "kind": "sds",
+                      "target": t["target"], "label": t["label"], "lookup": t["lookup"] or "",
+                      "status": "pending"} for i, t in enumerate(prev)] + tasks
+            inherited = True
 
     targets = [t.get("label") or _label(t["target"]) for t in tasks
                if t["agent"] == "research" and t.get("target")]
@@ -424,7 +651,14 @@ async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
 
 
 def _after_route(state: AgentState) -> str:
-    return "chat_answer" if state["route"] == "chat" else "plan"
+    return {"chat": "chat_answer", "category": "category_suggest",
+            "knowledge": "knowledge_answer"}.get(state["route"], "plan")
+
+
+def _after_knowledge_review(state: AgentState) -> str:
+    if state.get("knowledge_feedback"):
+        return "knowledge_answer"
+    return "knowledge_verify" if state["knowledge"]["substances"] else "knowledge_finalize"
 
 
 def _after_replan_check(state: AgentState) -> str:
@@ -441,6 +675,15 @@ def build_graph(deps: SupervisorDeps):
     node = lambda fn: partial(fn, deps=deps)   # 명시적 의존성 주입
     g.add_node("route", node(route_node))
     g.add_node("chat_answer", node(chat_answer_node))
+    # 성질로 물질 찾기
+    g.add_node("category_suggest", node(category_suggest_node))
+    g.add_node("category_verify", node(category_verify_node))
+    # 일반 화학 질문
+    g.add_node("knowledge_answer", node(knowledge_answer_node))
+    g.add_node("knowledge_review", node(knowledge_review_node))
+    g.add_node("knowledge_verify", node(knowledge_verify_node))
+    g.add_node("knowledge_finalize", node(knowledge_finalize_node))
+    # 물질 사용 전 안내
     g.add_node("plan", node(plan_node))
     g.add_node("gate", node(gate_node))
     g.add_node("research", node(research_node))
@@ -452,8 +695,20 @@ def build_graph(deps: SupervisorDeps):
 
     g.set_entry_point("route")
     g.add_conditional_edges("route", _after_route,
-                            {"chat_answer": "chat_answer", "plan": "plan"})
+                            {"chat_answer": "chat_answer", "category_suggest": "category_suggest",
+                             "knowledge_answer": "knowledge_answer", "plan": "plan"})
     g.add_edge("chat_answer", END)
+
+    g.add_edge("category_suggest", "category_verify")
+    g.add_edge("category_verify", END)
+
+    g.add_edge("knowledge_answer", "knowledge_review")
+    g.add_conditional_edges("knowledge_review", _after_knowledge_review,
+                            {"knowledge_answer": "knowledge_answer", "knowledge_verify": "knowledge_verify",
+                             "knowledge_finalize": "knowledge_finalize"})
+    g.add_edge("knowledge_verify", "knowledge_finalize")
+    g.add_edge("knowledge_finalize", END)
+
     g.add_edge("plan", "gate")
     g.add_edge("gate", "research")
     g.add_edge("research", "replan_check")

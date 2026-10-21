@@ -100,3 +100,36 @@ def test_route_calls_do_not_block_each_other(monkeypatch):
         return loop.time() - started
 
     assert asyncio.run(both()) < 0.55
+
+
+def test_openai_suggest_drops_bad_cas(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    content = json.dumps({"candidates": [
+        {"name_ko": "n-뷰틸리튬", "name_en": "n-Butyllithium", "cas": "109-72-8"},
+        {"name_ko": "가짜", "name_en": "Fake", "cas": "123-45-6"},          # 검증 숫자 틀림
+        {"name_ko": "중복", "name_en": "Dup", "cas": "109-72-8"},
+        {"name_ko": "CAS 없음", "name_en": "NoCas"}]}, ensure_ascii=False)
+    seen = []
+    _patch_client(monkeypatch, lambda req: httpx.Response(200, json={
+        "choices": [{"message": {"content": content}}], "usage": {"total_tokens": 9}}), seen)
+    llm = openai_llm.OpenAIFastLLM("gpt-4o-mini", usd_per_1k_tokens=0.00015)
+    cands, usage = asyncio.run(llm.suggest("자연발화 물질", "pyrophoric"))
+    assert cands == [{"name": "n-뷰틸리튬", "cas": "109-72-8"}]
+    assert seen[0]["response_format"] == {"type": "json_object"}
+    assert "H250" in seen[0]["messages"][0]["content"]
+
+
+def test_openai_knowledge_answer(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    content = json.dumps({"answer": "흡습성 물질은 공기 중 수분을 흡수합니다.", "substances": [
+        {"name_ko": "염화칼슘", "name_en": "Calcium chloride", "cas": "10043-52-4"},
+        {"name_ko": "가짜", "name_en": "Fake", "cas": "123-45-6"}]}, ensure_ascii=False)
+    seen = []
+    _patch_client(monkeypatch, lambda req: httpx.Response(200, json={
+        "choices": [{"message": {"content": content}}], "usage": {"total_tokens": 11}}), seen)
+    llm = openai_llm.OpenAIQualityLLM("gpt-4o", usd_per_1k_tokens=0.005)
+    result, usage = asyncio.run(llm.answer("흡습성 물질은?", [], "점검 반려: 수치 빼기"))
+    assert result == {"answer": "흡습성 물질은 공기 중 수분을 흡수합니다.",
+                      "substances": [{"name": "염화칼슘", "cas": "10043-52-4"}]}
+    assert seen[0]["response_format"] == {"type": "json_object"}
+    assert "점검 반려" in seen[0]["messages"][1]["content"]

@@ -152,6 +152,18 @@
   .foot { padding: 14px 20px 18px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--steel); }
   .foot a { color: var(--steel); }
 
+  .cat-list { display: grid; gap: 8px; }
+  .cat {
+    display: grid; gap: 2px; text-align: left; width: 100%; cursor: pointer;
+    background: var(--label); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 10px 14px;
+  }
+  .cat:hover { border-color: var(--ink); }
+  .cat b { font-size: 16px; }
+  .cat .cat-st { font-size: 14px; color: var(--ghs); }
+  .cat .cat-st.ok { color: var(--ok); }
+  .cat .cat-st.no { color: var(--steel); }
+  .answer { white-space: pre-wrap; margin: 0; font-size: 15px; }
+
   .unknown .chem-name b { color: var(--steel); }
   .cands { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .cand { border: 1px solid var(--ink); background: var(--label); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 14px; }
@@ -245,6 +257,63 @@
 
         <!-- 일반 대화 -->
         <div v-if="t.finished && (!t.notice || t.route === 'chat')" class="say">{{ t.reply }}</div>
+
+        <!-- 성질로 찾기 -->
+        <section v-else-if="t.finished && t.notice.kind === 'category'" class="label" aria-label="성질로 찾기">
+          <div class="label-head">
+            <h3><small>성질로 찾기 · GHS {{ t.notice.codes.join('·') }}</small>{{ t.notice.property }}</h3>
+            <div class="tools">
+              <button class="btn" type="button" @click="copy(t)">{{ t.copied ? '복사됨' : '복사' }}</button>
+            </div>
+          </div>
+          <div class="sub">
+            <h4>SDS 자료에서 확인된 물질 {{ t.notice.confirmed.length }}종</h4>
+            <p v-if="!t.notice.confirmed.length" style="margin:0">자료에서 이 분류가 확인된 물질이 없습니다. 인터넷 연결이나 데이터 모드(sample)를 확인하세요.</p>
+            <div class="cat-list">
+              <button class="cat" type="button" v-for="c in t.notice.confirmed" :key="c.cas" @click="send(`CAS ${c.cas} 주의사항 알려줘`)">
+                <span><b>{{ c.name }}</b> <span class="meta">CAS {{ c.cas }} · {{ sourceName(c.source) }}</span></span>
+                <span class="cat-st">{{ c.statement }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="sub" v-if="t.notice.unconfirmed.length">
+            <h4>후보였지만 자료로 확인하지 못한 물질</h4>
+            <p class="meta" style="margin:0">{{ t.notice.unconfirmed.map(u => `${u.name}(CAS ${u.cas})`).join(', ') }} — 추측이므로 안내하지 않습니다.</p>
+          </div>
+          <div class="foot">물질을 누르면 그 물질의 사용 전 안전 라벨을 만듭니다. AI가 제안한 후보 중 SDS에서 분류가 확인된 것만 보여 줍니다.<br />실제 사용 전에는 공식 SDS(KOSHA MSDS·제조사 SDS)를 확인하세요.</div>
+        </section>
+
+        <!-- 일반 화학 지식 -->
+        <section v-else-if="t.finished && t.notice.kind === 'knowledge'" class="label" aria-label="일반 화학 지식">
+          <div v-for="w in warnings(t.notice)" :key="w.title" class="alert" :class="w.kind">
+            <div><strong>{{ w.title }}</strong>{{ w.body }}</div>
+            <div class="calls" v-if="w.kind === 'danger'">
+              <a class="call" href="tel:119">119 신고</a>
+              <a class="call ghost" href="tel:109">109 상담</a>
+            </div>
+          </div>
+          <div class="label-head">
+            <h3><small>일반 화학 지식 · SDS로 확인한 내용 아님</small>AI 답변</h3>
+            <div class="tools">
+              <button class="btn" type="button" @click="copy(t)">{{ t.copied ? '복사됨' : '복사' }}</button>
+            </div>
+          </div>
+          <div class="sub"><p class="answer">{{ t.notice.answer }}</p></div>
+          <div class="alert caution" v-if="t.notice.unverified.length">
+            <div><strong>확인하지 않은 값</strong>답에 SDS로 확인하지 않은 값({{ t.notice.unverified.join(', ') }})이 있습니다. 사용 전 공식 SDS로 확인하세요.</div>
+          </div>
+          <div class="sub" v-if="t.notice.substances.length">
+            <h4>답에 나온 물질 — SDS 확인 결과</h4>
+            <div class="cat-list">
+              <button class="cat" type="button" v-for="c in t.notice.substances" :key="c.cas" @click="send(`CAS ${c.cas} 주의사항 알려줘`)">
+                <span><b>{{ c.name }}</b> <span class="meta">CAS {{ c.cas }}</span></span>
+                <span v-if="c.found" class="cat-st ok">SDS 확인됨{{ c.signal ? ' · 신호어 ' + signalText(c.signal) : '' }} · {{ sourceName(c.source) }}</span>
+                <span v-else class="cat-st no">SDS 확인 못 함 — {{ c.reason }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="foot">설명은 AI의 일반 화학 지식이고, 물질 목록만 SDS 자료로 확인했습니다. 물질을 누르면 그 물질의 사용 전 안전 라벨을 만듭니다.<br />실제 사용 전에는 공식 SDS(KOSHA MSDS·제조사 SDS)를 확인하세요.</div>
+        </section>
 
         <!-- 확인 불가 -->
         <section v-else-if="t.finished && t.notice.kind === 'unknown'" class="label unknown" aria-label="확인 불가">
@@ -412,8 +481,8 @@ const app = createApp({
 
     const examples = [
       { title: '같이 써도 될까', items: ['톨루엔이랑 질산 같이 써도 돼?', '락스랑 염산 섞어도 돼?'] },
-      { title: '한 가지 물질', items: ['수산화나트륨 사용 전 주의할 점', '자일렌 취급 주의사항'] },
-      { title: '실험 상황', items: ['염산과 NaOH로 중화 실험할 거야', '아세톤으로 유리기구 세척할 거야'] },
+      { title: '한 가지 물질', items: ['수산화나트륨 사용 전 주의할 점', '자연발화하는 물질은 뭐가 있어?'] },
+      { title: '일반 화학 질문', items: ['공기 중에 수증기를 흡수하는 물질은?', '염산과 NaOH로 중화 실험할 거야'] },
     ];
 
     const backend = computed(() => health.value?.llm_backend || '');
@@ -437,7 +506,8 @@ const app = createApp({
     function stepOf(e) {
       switch (e.type) {
         case 'RouteDecided': return 0;
-        case 'PlanCreated': return 1;
+        case 'PlanCreated': case 'CategoryPlanned': case 'KnowledgeAnswered': return 1;
+        case 'KnowledgeReviewed': return e.retry ? 1 : 2;
         case 'GateApplied': return 2;
         case 'TaskCompleted': return e.source === 'sds' ? 3 : 4;
         case 'ReplanCheck': return e.is_sufficient ? 4 : 3;
@@ -445,6 +515,7 @@ const app = createApp({
         case 'AnalysisCompleted': case 'AnalysisSkipped': return 5;
         case 'DraftWritten': return 6;
         case 'Validation': return e.verdict.startsWith('합격') ? 7 : 6;
+        case 'CategoryChecked': case 'KnowledgeChecked': return 7;
         default: return -1;
       }
     }
@@ -454,12 +525,18 @@ const app = createApp({
           return `조사할 물질 ${e.targets.length}종${e.targets.length ? ': ' + e.targets.join(', ') : ''}`
             + (e.inherited ? ' (앞 질문에서 이어받음)' : '')
             + (e.intent?.ingest ? ' · 섭취 의도 감지' : '') + (e.intent?.synthesis ? ' · 합성 의도 감지' : '');
+        case 'CategoryPlanned':
+          return `${e.property} 후보 ${e.candidates}종 (AI 제안 ${e.from_llm}종${e.seeds_added ? ' + 기본 후보 ' + e.seeds_added + '종' : ''})`;
+        case 'CategoryChecked': return `SDS 자료로 확인 ${e.confirmed}종 · 확인 못 함 ${e.unconfirmed}종`;
+        case 'KnowledgeAnswered': return `AI 답변 작성 (${e.attempt}번째) · 언급한 물질 ${e.substances}종`;
+        case 'KnowledgeReviewed': return e.ok ? '답변 점검 통과' : (e.retry ? '답변 점검 반려 → 다시 작성: ' : '답변 점검: 확인 안 된 값 경고 표시 — ') + (e.problems || []).join(' / ');
+        case 'KnowledgeChecked': return `언급한 물질 SDS 확인 ${e.confirmed}종 · 확인 못 함 ${e.unconfirmed}종`;
         case 'GateApplied':
           return e.added_analysis_tasks ? '물질이 2종 이상이라 혼촉 점검 추가'
             : e.removed_analysis_tasks ? '물질이 1종이라 혼촉 점검 생략' : '혼촉 점검 범위 확인';
         case 'TaskCompleted':
           return e.source === 'sds'
-            ? `${e.label} SDS 조회${e.found === false ? ' — 정보 없음' : ''}${e.retries ? ' (재시도 성공)' : ''}`
+            ? `${e.label} SDS 조회${e.found === false ? ' — 정보 없음' : ''}${e.confirmed === false ? ' — 분류 확인 안 됨' : ''}${e.retries ? ' (재시도 성공)' : ''}`
             : `${e.label} 취급 지침 조회`;
         case 'ReplanCheck': return e.is_sufficient ? '수집 정보 충분' : `유해성 유형 확인 → 지침 보충: ${(e.targets || []).join(', ')}`;
         case 'AnalysisCompleted': return e.conflicts ? `혼촉 위험 ${e.conflicts}건 발견` : '규칙상 혼촉 위험 없음';
@@ -558,6 +635,7 @@ const app = createApp({
       });
       return out.length ? out : [{ text: '조회된 자료 없음' }];
     }
+    function sourceName(s) { return { kosha: '안전보건공단 MSDS', pubchem: 'PubChem', sample: '샘플 데이터' }[s] || s; }
     function signalClass(s) { return /위험|danger/i.test(s) ? 'danger' : 'warning'; }
     function signalText(s) { return /위험|danger/i.test(s) ? '위험' : /경고|warning/i.test(s) ? '경고' : s; }
 
@@ -576,7 +654,7 @@ const app = createApp({
     }
 
     return { STEPS, turns, input, sending, scrollEl, health, catalog, examples, backend, statusText, statusTitle,
-             printId, send, newChat, stepClass, activeStep, warnings, pairs, sources, signalClass, signalText, copy, print };
+             printId, send, newChat, stepClass, activeStep, warnings, pairs, sources, sourceName, signalClass, signalText, copy, print };
   },
 });
 

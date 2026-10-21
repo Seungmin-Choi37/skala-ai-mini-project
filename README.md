@@ -89,7 +89,7 @@ grep CHEM_DATA_MODE .env
 ```bash
 bash sh/run_tests.sh
 ```
-마지막 줄에 **`72 passed`**(숫자는 달라질 수 있다)처럼 `passed`만 나오면 성공이다.
+마지막 줄에 **`86 passed`**(숫자는 달라질 수 있다)처럼 `passed`만 나오면 성공이다.
 `failed`나 `error`가 나오면 `bash sh/setup_venv.sh`를 다시 실행한 뒤 한 번 더 해 본다.
 
 > 💡 `sh/...` 파일 앞에는 항상 `bash`를 붙여 실행한다. 그러면 `chmod +x`(실행 권한 주기)를 할 필요가 없다.
@@ -177,7 +177,10 @@ python web_demo_server.py
 | `그럼 보관은?` | 바로 앞 질문의 물질을 이어받아 답한다 |
 | `금속나트륨이랑 염산 같이 보관해도 돼?` | 물 반응성×산 **위험** + 노란 띠 "섞지 않아도 주의"(물·습기 금지) |
 | `다이에틸에테르 써도 돼?` | 노란 띠: 오래 두면 폭발성 과산화물이 생김 — 개봉일 기록 |
+| `n-뷰틸리튬으로 합성할 거야` | 합성 절차 미안내 + 노란 띠 "공기와 닿으면 저절로 불이 붙음"(자연발화성) |
+| `자연발화하는 물질은 뭐가 있어?` | **성질로 찾기** 카드 — AI가 후보를 내고, SDS에서 H250이 확인된 물질만 보여 준다. 누르면 그 물질의 라벨로 이어진다 |
 | `DMA` | **확인할 수 없는 물질** 카드 + 후보 버튼 2개 — 누르면 그 물질로 다시 확인한다 |
+| `공기 중에 수증기를 흡수하는 물질은?` | **일반 화학 지식** 카드(실제 AI 모드) — AI가 흡습성을 설명하고, 답에 나온 물질마다 "SDS 확인됨/확인 못 함"을 붙인다. fake 모드는 LLM이 없어 "알 수 없습니다"로 답한다 |
 | `날씨 어때?` | "알 수 없습니다" — 화학물질 안전 안내만 한다고 답한다 |
 
 4. 답이 나오는 동안 **진행 막대 8칸**이 차례로 채워진다
@@ -359,7 +362,11 @@ bash sh/run_tests.sh
 ## 파이프라인 (agent/graph.py)
 
 ```
-route ─ chat ──▶ chat_answer ─▶ 끝
+route ─ chat ──────▶ chat_answer ─▶ 끝
+  ├ category ─▶ category_suggest(LLM 후보) ─▶ category_verify(H코드가 SDS에 있는 것만) ─▶ 끝
+  ├ knowledge ─▶ knowledge_answer ─▶ knowledge_review ─┬▶ knowledge_verify(언급 물질 SDS 확인) ─▶ knowledge_finalize ─▶ 끝
+  │                    ▲                              │
+  │                    └──── 수치·H코드 반려(≤2회) ──────┘
   └ safety ─▶ plan ─▶ gate ─▶ research ─▶ replan_check ─┬▶ analysis ─▶ write ─▶ validate ─▶ finalize
                                   ▲                     │                ▲           │
                                   └── 지침 부족(1회) ─────┘                └─ 반려(≤3회) ┘
@@ -367,7 +374,11 @@ route ─ chat ──▶ chat_answer ─▶ 끝
 
 | 노드 | 하는 일 | 판단 주체 |
 |---|---|---|
-| route | 화학안전 문의(safety)인지 일반 대화(chat)인지 분류. **모델이 chat이라 해도 물질 이름·안전 키워드가 보이면 safety로 보낸다** | LLM + 코드 |
+| route | LLM이 먼저 분류하고 **코드가 최종 결정**(`decide_route`): 성질+목록 질문 → category, 물질 이름·CAS → safety, 짧은 후속 질문("그럼 보관은?") → safety(앞 물질 이어받기), 화학·안전 질문 → knowledge, 나머지 → chat. 모델이 chat이라 해도 물질 이름이 보이면 safety로 보낸다 | LLM + 코드 |
+| category_suggest → category_verify | "자연발화하는 것은?"처럼 **성질로 묻는 질문**. LLM이 후보 물질(CAS)을 제안 → CAS 검증 숫자로 1차 거름 → 후보마다 SDS 조회 → 그 성질의 H코드(자연발화성 H250, 물 반응성 H260 등)가 **자료에 실제로 있는 물질만** 답한다. 이름도 자료에서 가져온다 | LLM 제안 + 코드 확인 |
+| knowledge_answer | 물질 이름 없는 **일반 화학 질문**("흡습성 물질은?", "산과 염기를 섞으면 왜 열이 나?", "흄후드는 언제 써?"). 고품질 모델이 일반 지식으로 설명하고, 언급한 물질을 CAS와 함께 낸다 | LLM |
+| knowledge_review | 답에 안전 수치(°C·%·ppm 등)·H코드가 있으면 반려하고 다시 쓰게 한다(최대 2회). 끝까지 남으면 지우지 않고 "확인하지 않은 값" 경고를 붙인다 | 코드 |
+| knowledge_verify → knowledge_finalize | 답에 나온 물질을 병렬로 SDS 조회해 "SDS 확인됨/확인 못 함"을 붙이고, "일반 화학 지식 — SDS로 확인한 내용 아님" 표시와 함께 코드가 답을 조립한다 | 코드 |
 | plan | 조사할 물질 목록 수립, 섭취·합성 의도 인식. 물질이 없으면 직전 질문의 물질을 이어받는다 | LLM + 코드 보정 |
 | gate | 물질 2종 이상이면 혼촉 점검을 반드시 넣고, 1종이면 뺀다 | 코드 |
 | research | MCP Tool `get_substance_safety`(SDS)와 Resource `safety-guide://hazard/{type}`(지침)를 병렬 호출, 일시 오류 재시도. 약어는 추측해 조회하지 않는다 | 코드 |
@@ -376,6 +387,9 @@ route ─ chat ──▶ chat_answer ─▶ 끝
 | write | 수집된 사실만으로 안내문 작성. 하나도 확인하지 못했으면 `[확인 불가]`로 짧게 답한다 | LLM |
 | validate | 6개 항목·출처·물질 누락, 섭취 시 119 경고, 합성 시 "합성 절차 미안내" 문구, **수집된 자료에 없는 수치(°C·%·ppm 등)·H코드**를 검사 | 코드 |
 | finalize | 안내문 텍스트와 함께 화면용 구조화 데이터(`notice`: 그림문자 코드·신호어·혼촉 쌍·단독 주의·보호구·약어 후보)를 만들어 보낸다 | 코드 |
+
+> knowledge 경로는 이 프로젝트에서 유일하게 **설명 문장을 LLM 지식에 맡기는** 곳이다. 그래서 화면에
+> "SDS로 확인한 내용 아님"을 표시하고, 수치·H코드는 반려하며, 언급한 물질만큼은 SDS로 확인해 보여 준다.
 
 fake 백엔드는 원본의 연출 두 가지를 유지한다 — plan이 1종일 때도 혼촉 점검을 끼워 넣는 자기모순(→ gate가
 제거), write 1차 초안을 일부러 부실하게(→ validate 반려 후 재작성). 첫 SDS 조회 1회는 일부러
@@ -393,7 +407,7 @@ fake 백엔드는 원본의 연출 두 가지를 유지한다 — plan이 1종�
 | analysis | LLM이 시스템 패턴 비교 | 코드 규칙표로 혼촉 판정 |
 | validate | 30자 이상 + "1)" | 6개 항목·출처·물질 누락·의도 경고 + 근거 없는 수치·H코드 검사 |
 | LLM 호출 | 동기 `httpx.post`(응답 기다리는 동안 서버 전체가 멈춤) | 비동기 `httpx.AsyncClient` + OpenAI 스트리밍 |
-| 테스트 | 없음 | `tests/` pytest 70여 개 |
+| 테스트 | 없음 | `tests/` pytest 85여 개 |
 | 공통 코드 | 프롬프트·계획 보정이 ollama/openai에 복붙 | `agent/prompts.py`로 통합 |
 | 도메인 규칙 | 노드 안에 흩어짐 | `agent/chem_rules.py`에 모음 |
 
@@ -459,8 +473,8 @@ KOSHA는 **한국어 물질명으로 조회**되고 문구가 한국어 원문�
 2. `.env`에 `DATA_GO_KR_API_KEY=발급받은키` 한 줄 추가 (코드·문서·깃·화면 캡처에 키를 넣지 않는다)
 3. 백엔드를 다시 켠다. 출처가 "안전보건공단 MSDS"로 나오면 동작하는 것이다
 
-> ⚠️ `agent/kosha.py`는 공개 명세를 보고 만들었고 **실제 서버로는 아직 시험하지 못했다.**
-> 처음 켤 때 [doc/run_guide.md의 6-3 연결 확인](doc/run_guide.md#6-3-연결-확인)을 한 번 실행한다.
+> ✅ 실제 KOSHA 서버로 연결을 확인했다(톨루엔: 신호어 위험, H225·H304·H315, 응급조치 눈·피부·흡입·섭취).
+> 처음 켤 때 [doc/run_guide.md의 6-3 연결 확인](doc/run_guide.md#6-3-연결-확인)을 한 번 실행해 본인 키로도 확인한다.
 > KOSHA가 실패하면 이유를 메모로 남기고 PubChem으로 자동으로 넘어가므로 서비스는 멈추지 않는다.
 > 끄려면 `.env`에 `KOSHA_ENABLED=0`.
 

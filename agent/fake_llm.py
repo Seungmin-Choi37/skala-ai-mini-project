@@ -5,6 +5,8 @@
 - plan  : 물질이 1종이어도 analysis task를 끼워 넣는 '모델의 자기모순' → gate가 제거
 - write : 1차 초안은 일부러 부실하게 → validate가 반려 → 2차에 형식을 갖춘 안내문
 
+일반 화학 질문(answer)에는 지식이 없으므로 "알 수 없습니다"로 답한다 — 실모델 모드에서 답한다.
+
 모든 메서드는 실모델 백엔드(ollama/openai)와 똑같이 async다 — 그래프는 백엔드를 가리지 않고 await한다.
 """
 import re
@@ -12,7 +14,7 @@ import re
 from langsmith import traceable
 
 from . import chem_rules
-from .prompts import _research_task, intent_warnings, keyword_route
+from .prompts import UNKNOWN_REPLY, _research_task, intent_warnings, keyword_route
 
 
 class FakeLLM:
@@ -42,6 +44,12 @@ class FastLLM(FakeLLM):
                       "kind": "incompatibility", "status": "pending"})   # 1종이면 자기모순
         result = {"needs_analysis": False, "tasks": tasks}
         return result, self._usage(query + procedure_prompt, str(result))
+
+    @traceable(run_type="llm", name="fast_llm.suggest")
+    async def suggest(self, query: str, prop: str) -> tuple[list[dict], dict]:
+        """성질로 물질 찾기 — fake는 코드에 정해 둔 기본 후보를 그대로 낸다."""
+        seeds = [{"name": n, "cas": c} for n, c in chem_rules.PROPERTY_QUERIES[prop]["seeds"]]
+        return seeds, self._usage(query, str(seeds))
 
     @traceable(run_type="llm", name="fast_llm.chat")
     async def chat(self, query: str, history: list[dict], on_token=None) -> tuple[str, dict]:
@@ -84,6 +92,15 @@ class QualityLLM(FakeLLM):
         if on_token is not None:
             on_token(draft)
         return draft, self._usage(query + str(feedback), draft)
+
+    @traceable(run_type="llm", name="quality_llm.answer")
+    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
+        """일반 화학 질문 — fake에는 화학 지식이 없으므로 지어내지 않고 모른다고 답한다."""
+        result = {"answer": UNKNOWN_REPLY.split(".")[0] + " — fake 모드에는 LLM이 없어 일반 화학 질문에는 "
+                            "답하지 않습니다. 실제 AI 모드(OpenAI·Ollama)로 켜면 답합니다. 특정 물질의 사용 전 "
+                            "안전 안내는 물질 이름이나 CAS 번호로 물어보세요.",
+                  "substances": []}
+        return result, self._usage(query, result["answer"])
 
 
 def _guide_lines(guides: list[str], prefix: str) -> list[str]:

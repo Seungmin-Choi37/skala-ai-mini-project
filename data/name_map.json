@@ -1,5 +1,5 @@
 {
-  "_comment": "한국어 물질명 → PubChem 조회용 영문명·CAS 사전. GHS 데이터는 들어 있지 않다 — CHEM_DATA_MODE=live일 때 KOSHA·PubChem에서 가져온다. tags는 혼촉 판정용이며, 조회에 실패해도 이 tags로 혼촉 점검을 한다. 쓰는 태그: acid, oxidizing-acid, base, ammonia, hypochlorite, cyanide, organic-solvent, organic, halogenated, ketone, oxidizer, peroxide, peroxide-former, reducer, water-reactive, alkali-metal, aqueous, silver, explosive.",
+  "_comment": "한국어 물질명 → PubChem 조회용 영문명·CAS 사전. GHS 데이터는 들어 있지 않다 — CHEM_DATA_MODE=live일 때 KOSHA·PubChem에서 가져온다. tags는 혼촉 판정용이며, 조회에 실패해도 이 tags로 혼촉 점검을 한다. 쓰는 태그: acid, oxidizing-acid, base, ammonia, hypochlorite, cyanide, organic-solvent, organic, halogenated, ketone, oxidizer, peroxide, peroxide-former, reducer, pyrophoric, water-reactive, alkali-metal, aqueous, silver, explosive.",
   "xylene": {"name_ko": "자일렌", "name_en": "Xylene", "cas": "1330-20-7", "aliases": ["자일렌", "크실렌", "xylene"], "tags": ["organic-solvent"]},
   "benzene": {"name_ko": "벤젠", "name_en": "Benzene", "cas": "71-43-2", "aliases": ["벤젠", "benzene"], "tags": ["organic-solvent"]},
   "hexane": {"name_ko": "헥산", "name_en": "Hexane", "cas": "110-54-3", "aliases": ["헥산", "노르말헥산", "n-헥산", "hexane", "n-hexane"], "tags": ["organic-solvent"]},
@@ -40,5 +40,6 @@
   "pyridine": {"name_ko": "피리딘", "name_en": "Pyridine", "cas": "110-86-1", "aliases": ["피리딘", "pyridine"], "tags": ["organic-solvent"]},
   "aniline": {"name_ko": "아닐린", "name_en": "Aniline", "cas": "62-53-3", "aliases": ["아닐린", "aniline"], "tags": ["organic"]},
   "naphthalene": {"name_ko": "나프탈렌", "name_en": "Naphthalene", "cas": "91-20-3", "aliases": ["나프탈렌", "naphthalene"], "tags": ["organic"]},
-  "ethylene_glycol": {"name_ko": "에틸렌글리콜", "name_en": "Ethylene glycol", "cas": "107-21-1", "aliases": ["에틸렌글리콜", "ethylene glycol"], "tags": ["organic"]}
+  "ethylene_glycol": {"name_ko": "에틸렌글리콜", "name_en": "Ethylene glycol", "cas": "107-21-1", "aliases": ["에틸렌글리콜", "ethylene glycol"], "tags": ["organic"]},
+  "n_butyllithium": {"name_ko": "n-뷰틸리튬", "name_en": "n-Butyllithium", "cas": "109-72-8", "aliases": ["n-뷰틸리튬", "n-부틸리튬", "노말뷰틸리튬", "노말부틸리튬", "뷰틸리튬", "부틸리튬", "n-BuLi", "BuLi", "n-butyllithium", "butyllithium"], "tags": ["pyrophoric", "water-reactive", "reducer"]}
 }

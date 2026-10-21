@@ -150,7 +150,7 @@ def test_no_conflict_between_two_solvents():
 def test_catalog_tags_are_known():
     known = {"acid", "oxidizing-acid", "base", "ammonia", "hypochlorite", "cyanide", "organic-solvent",
              "organic", "halogenated", "ketone", "oxidizer", "peroxide", "peroxide-former", "reducer",
-             "water-reactive", "alkali-metal", "aqueous", "silver", "explosive"}
+             "pyrophoric", "water-reactive", "alkali-metal", "aqueous", "silver", "explosive"}
     for sid, entry in cr.CATALOG.items():
         assert set(entry.get("tags", [])) <= known, sid
 
@@ -166,3 +166,41 @@ def test_ppe_and_pictograms():
     ppe = cr.ppe_for([{**S["nitric_acid"], "found": True}])
     assert ppe[0].startswith("공통:") and any(p.startswith("부식성") for p in ppe)
     assert cr.pictogram_codes(["GHS02 인화성", "Flammable", "Corrosive"]) == ["GHS02", "GHS05"]
+
+
+# ── 자연발화성·성질로 물질 찾기 ──────────────────────────────────────
+def test_butyllithium_recognized_and_pyrophoric():
+    assert cr.find_substances("n-뷰틸리튬으로 합성할 거야") == ["n_butyllithium"]
+    assert cr.find_substances("n-뷰틸 리튬 주의사항") == ["n_butyllithium"]
+    assert cr.resolve("n-BuLi") == "n_butyllithium" and cr.resolve("109-72-8") == "n_butyllithium"
+    assert cr.classes_from_hazard_statements(["H250 공기에 노출되면 자연발화함"]) == ["pyrophoric"]
+    assert cr.korean_hazard("H250: Catches fire spontaneously if exposed to air") == "H250 공기에 노출되면 자연발화함"
+    tags = [c["tag"] for c in cr.solo_cautions([{"name_ko": "n-뷰틸리튬", **cr.CATALOG["n_butyllithium"]}])]
+    assert tags == ["pyrophoric", "water-reactive"]
+
+
+def test_detect_property():
+    assert cr.detect_property("공기 중에 놔두면 자연 발화하는 물질에는 뭐가 있지?") == "pyrophoric"
+    assert cr.detect_property("물이랑 닿으면 위험한 물질 종류 알려줘") == "water-reactive"
+    assert cr.detect_property("과산화물 생기는 용매 뭐 있어?") == "peroxide-former"
+    assert cr.detect_property("산화제에는 뭐가 있어?") == "oxidizer"
+    assert cr.detect_property("발암 물질 예시") == "carcinogen"
+    assert cr.detect_property("톨루엔은 산화제야?") is None          # 특정 물질 질문은 기존 안내문으로
+    assert cr.detect_property("산화제 조심해야지") is None             # 목록을 묻는 말이 없음
+    assert cr.detect_property("공기 중에 자연발화되는 것은?") == "pyrophoric"   # 짧게 끝나는 목록 질문
+    assert cr.detect_property("물과 반응하는 금속은?") == "water-reactive"
+
+
+def test_cas_check_digit():
+    assert cr.cas_valid("7732-18-5") and cr.cas_valid("109-72-8")
+    assert not cr.cas_valid("123-45-6") and not cr.cas_valid("abc")
+    for spec in cr.PROPERTY_QUERIES.values():           # 기본 후보 CAS가 모두 올바른지
+        assert all(cr.cas_valid(cas) for _, cas in spec["seeds"])
+
+
+def test_has_codes():
+    sds = {"found": True, "hazard_statements": ["H225 고인화성 액체 및 증기", "H250 공기에 노출되면 자연발화함"]}
+    assert cr.has_codes(sds, ["H250"]).startswith("H250")
+    assert cr.has_codes(sds, ["H260"]) is None
+    assert cr.has_codes({"found": False}, ["H250"]) is None
+    assert cr.has_codes({"found": True, "hazard_statements": ["H2501 가짜"]}, ["H250"]) is None

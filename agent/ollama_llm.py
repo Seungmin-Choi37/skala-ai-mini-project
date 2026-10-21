@@ -1,6 +1,7 @@
 """LLM_BACKEND=ollama — 로컬 Ollama 실모델 백엔드 (fake_llm과 동일 인터페이스).
 
-fast(기본 qwen3:0.6b)는 분류·계획·단순 대화, quality(기본 qwen3:8b)는 안내문 작성 전담.
+fast(기본 qwen3:0.6b)는 분류·계획·단순 대화, quality(기본 qwen3:8b)는 안내문 작성과
+일반 화학 질문(knowledge) 답변 전담.
 Ollama의 구조화 출력(format=<JSON Schema>)과 temperature=0으로 변동을 줄이지만 실모델이라
 결정론은 아니다 — 그래서 gate·replan·validate가 연출이 아니라 실제 방어선으로 동작한다.
 프롬프트와 계획 보정 코드는 openai_llm.py와 공유한다(agent/prompts.py).
@@ -18,14 +19,14 @@ import os
 import httpx
 from langsmith import traceable
 
-from . import prompts
+from . import chem_rules, prompts
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 
 ROUTE_SCHEMA = {
     "type": "object",
     "properties": {
-        "route": {"type": "string", "enum": ["chat", "safety"]},
+        "route": {"type": "string", "enum": ["chat", "safety", "knowledge"]},
         "needs_analysis": {"type": "boolean"},
     },
     "required": ["route", "needs_analysis"],
@@ -49,6 +50,33 @@ PLAN_SCHEMA = {
         },
     },
     "required": ["needs_analysis", "tasks"],
+}
+
+
+SUGGEST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"name_ko": {"type": "string"}, "name_en": {"type": "string"},
+                               "cas": {"type": "string"}},
+                "required": ["cas"],
+            },
+        },
+    },
+    "required": ["candidates"],
+}
+
+
+KNOWLEDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "substances": SUGGEST_SCHEMA["properties"]["candidates"],
+    },
+    "required": ["answer", "substances"],
 }
 
 
@@ -121,7 +149,7 @@ class OllamaFastLLM(OllamaLLM):
         content, usage = await self._chat(prompts.ROUTE_SYSTEM, query, schema=ROUTE_SCHEMA)
         try:
             raw = json.loads(content)
-            route = raw.get("route") if raw.get("route") in ("chat", "safety") else None
+            route = raw.get("route") if raw.get("route") in prompts.ROUTES else None
             result = {"route": route or prompts.keyword_route(query),
                       "needs_analysis": bool(raw.get("needs_analysis", False))}
         except (json.JSONDecodeError, AttributeError):
@@ -139,6 +167,17 @@ class OllamaFastLLM(OllamaLLM):
             raw = {"needs_analysis": False, "tasks": []}
         return prompts.normalize_plan(raw, query), usage
 
+    @traceable(run_type="llm", name="ollama_fast.suggest")
+    async def suggest(self, query: str, prop: str) -> tuple[list[dict], dict]:
+        spec = chem_rules.PROPERTY_QUERIES[prop]
+        content, usage = await self._chat(prompts.suggest_system(spec["label"], spec["codes"]), query,
+                                          schema=SUGGEST_SCHEMA)
+        try:
+            raw = json.loads(content)
+        except json.JSONDecodeError:
+            raw = {}
+        return prompts.normalize_candidates(raw), usage
+
     @traceable(run_type="llm", name="ollama_fast.chat")
     async def chat(self, query: str, history: list[dict], on_token=None) -> tuple[str, dict]:
         user = prompts.chat_user(query, history)
@@ -153,3 +192,15 @@ class OllamaQualityLLM(OllamaLLM):
                     feedback: str | None, on_token=None) -> tuple[str, dict]:
         user = prompts.write_user(query, collected, feedback)
         return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)
+
+    @traceable(run_type="llm", name="ollama_quality.answer")
+    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
+        """일반 화학 질문 — 설명과 언급한 물질(CAS)을 JSON으로 받는다."""
+        content, usage = await self._chat(prompts.KNOWLEDGE_SYSTEM,
+                                          prompts.knowledge_user(query, history, feedback),
+                                          schema=KNOWLEDGE_SCHEMA)
+        try:
+            raw = json.loads(content)
+        except json.JSONDecodeError:
+            raw = {}
+        return prompts.normalize_knowledge(raw), usage

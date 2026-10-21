@@ -7,7 +7,10 @@
 - 한국어 문구   : PubChem 영어 H문구를 data/h_statements_ko.json 표로 바꾼다
 - 성질 태그     : H코드·PubChem 'Reactive Group'(CAMEO 반응성 분류)에서 혼촉용 태그를 뽑는다
 - 혼촉 위험     : 물질 쌍마다 hazard class·tag 조합 규칙으로 판정
-- 단독 주의     : 섞지 않아도 위험한 성질(과산화물 생성, 물 반응성)을 물질별로 알린다
+- 단독 주의     : 섞지 않아도 위험한 성질(자연발화, 과산화물 생성, 물 반응성)을 물질별로 알린다
+- 성질 질의     : "자연발화하는 물질은 뭐가 있어?"처럼 물질 이름 없이 성질로 묻는 질문을 알아보고,
+                  그 성질을 증명하는 GHS H코드(예: 자연발화성 H250)와 기본 후보 목록을 준다
+- 화학 질문     : 물질 이름이 없는 일반 화학 질문("흡습성 물질은?")을 알아보는 표현(CHEM_CUE)
 - 보호구        : hazard class별 최소 보호구 목록
 """
 import json
@@ -34,6 +37,7 @@ H_STATEMENTS_KO = _load("h_statements_ko.json")       # H코드 → 한국어 �
 # 순서가 우선순위다 — replan_check가 지침을 고를 때 위험한 것부터 고른다.
 HAZARD_LABELS = {
     "explosive": "폭발성",
+    "pyrophoric": "자연발화성",
     "water-reactive": "물 반응성",
     "oxidizer": "산화성",
     "flammable": "인화성",
@@ -47,6 +51,7 @@ HAZARD_LABELS = {
 # GHS H코드 → hazard class (PubChem 실데이터를 분류할 때 사용)
 _H_CODE_RULES = [
     (re.compile(r"H20[0-5]"), "explosive"),
+    (re.compile(r"H250"), "pyrophoric"),
     (re.compile(r"H26[01]"), "water-reactive"),
     (re.compile(r"H2(2[0-8])"), "flammable"),
     (re.compile(r"H2(7[0-2])"), "oxidizer"),
@@ -58,6 +63,7 @@ _H_CODE_RULES = [
 
 PPE_BY_CLASS = {
     "explosive": "담당자 승인 후 취급, 충격·마찰·열·정전기 금지, 안면보호구·방호 차폐막",
+    "pyrophoric": "난연 실험복 필수, 보안경+안면보호구, 불활성 기체(질소·아르곤) 분위기, D급 소화기·마른 모래 준비",
     "water-reactive": "물·습기 차단, 건조한 불활성 분위기, 금속 화재용(D급) 소화기 준비",
     "corrosive": "보안경+안면보호구, 내산·내알칼리 장갑(니트릴/네오프렌)",
     "oxidizer": "보안경(튐 위험 시 안면보호구), 내화학 장갑",
@@ -118,6 +124,8 @@ _IMPLIES = {
 
 # 섞지 않아도 그 물질 하나로 생기는 위험 — 안내문 '취급 주의'와 라벨 카드에 따로 표시한다
 SOLO_CAUTIONS = {
+    "pyrophoric": "공기와 닿으면 저절로 불이 붙음 — 질소·아르곤 같은 불활성 기체 아래에서 다루고, 옮길 때는 "
+                  "밀폐된 주사기·캐뉼라를 쓰며, 주변 가연물을 치우고 혼자 작업하지 말 것",
     "peroxide-former": "공기·빛에 오래 두면 폭발성 과산화물이 생길 수 있음 — 용기에 개봉일을 적고, "
                        "오래됐거나 뚜껑 주변에 결정이 보이면 열거나 농축하지 말고 안전관리자에게 알릴 것",
     "water-reactive": "물·습기와 닿으면 인화성 기체가 생길 수 있음 — 물로 씻거나 물 소화기를 쓰지 말고, "
@@ -126,6 +134,7 @@ SOLO_CAUTIONS = {
 
 # H코드에서 바로 알 수 있는 태그
 _H_CODE_TAGS = [
+    (re.compile(r"H250"), "pyrophoric"),
     (re.compile(r"EUH019"), "peroxide-former"),
     (re.compile(r"H26[01]|EUH014"), "water-reactive"),
     (re.compile(r"H27[0-2]"), "oxidizer"),
@@ -172,6 +181,88 @@ def tags_from_reactive_groups(groups: list[str]) -> list[str]:
             if key in low:
                 tags += mapped
     return list(dict.fromkeys(tags))
+
+
+# ── 성질로 물질 찾기 ("자연발화하는 물질은 뭐가 있어?") ─────────────────
+# 성질마다: 화면 이름, 그 성질을 '증명'하는 GHS 코드, 질문에서 알아볼 표현, 기본 후보.
+# LLM이 후보를 더 제안하지만, 최종 답에는 KOSHA·PubChem 자료에서 이 코드가 실제로 확인된 물질만 나간다.
+# 기본 후보는 LLM이 없거나(fake) 후보를 너무 적게 낼 때 쓰는 출발점일 뿐, 이것도 똑같이 자료로 확인한다.
+PROPERTY_QUERIES = {
+    "pyrophoric": {
+        "label": "공기 중 자연발화성", "codes": ["H250"],
+        "pattern": r"자연\s*발화|공기.{0,10}(불이|불 붙|발화|타는|타버)|pyrophoric",
+        "seeds": [("n-뷰틸리튬", "109-72-8"), ("tert-뷰틸리튬", "594-19-4"), ("트라이에틸알루미늄", "97-93-8"),
+                  ("트라이메틸알루미늄", "75-24-1"), ("다이에틸아연", "557-20-0"), ("백린(황린)", "12185-10-3"),
+                  ("실레인", "7803-62-5")],
+    },
+    "water-reactive": {
+        "label": "물 반응성(금수성)", "codes": ["H260", "H261", "EUH014"],
+        "pattern": r"금수성|물.{0,8}(반응|닿으면|만나면|접촉|불이|폭발)|water.?reactive",
+        "seeds": [("금속 나트륨", "7440-23-5"), ("금속 칼륨", "7440-09-7"), ("금속 리튬", "7439-93-2"),
+                  ("수소화나트륨", "7646-69-7"), ("수소화알루미늄리튬", "16853-85-3"), ("탄화칼슘", "75-20-7")],
+    },
+    "peroxide-former": {
+        "label": "과산화물 생성", "codes": ["EUH019"],
+        "pattern": r"과산화물.{0,6}(생성|생기|생길|만들|형성)|peroxide.?form",
+        "seeds": [("다이에틸에테르", "60-29-7"), ("테트라하이드로퓨란", "109-99-9"), ("1,4-다이옥세인", "123-91-1"),
+                  ("다이아이소프로필에테르", "108-20-3")],
+    },
+    "oxidizer": {
+        "label": "산화성", "codes": ["H270", "H271", "H272"],
+        "pattern": r"산화제|산화성",
+        "seeds": [("질산", "7697-37-2"), ("과산화수소", "7722-84-1"), ("과망가니즈산칼륨", "7722-64-7"),
+                  ("질산암모늄", "6484-52-2"), ("다이크로뮴산칼륨", "7778-50-9"), ("염소산나트륨", "7775-09-9")],
+    },
+    "carcinogen": {
+        "label": "발암성", "codes": ["H350", "H351"],
+        "pattern": r"발암|암을\s*일으|carcinogen",
+        "seeds": [("벤젠", "71-43-2"), ("폼알데하이드", "50-00-0"), ("다이크로뮴산칼륨", "7778-50-9"),
+                  ("클로로포름", "67-66-3"), ("다이클로로메테인", "75-09-2")],
+    },
+}
+# 목록을 묻는 표현 — "톨루엔은 산화제야?"처럼 특정 물질을 묻는 질문과 구분하기 위해 함께 있어야 한다
+_LIST_CUE = re.compile(
+    r"뭐|뭘|뭔|무엇|어떤|어느|종류|예시|예를|목록|리스트|있어|있나|있니|있을까|있는지|알려|대표|"
+    r"(물질|것|시약|화합물|용매|금속|기체|약품)(은|는|들|이|에는)?\s*[?？]?\s*$|"
+    r"which|what|list|examples", re.I)
+
+# 화학·실험실 질문인지 알아보는 표현 — 물질 이름이 없어도 일반 화학 질문(knowledge)으로 보낸다.
+# 이 표현이 없고 안전 키워드도 없으면 인사·잡담(chat)으로 본다.
+CHEM_CUE = re.compile(
+    r"물질|화합물|화학|원소|분자|원자|이온|반응|용액|용매|용질|시약|산성|염기|알칼리|중화|흡습|조해|증기|"
+    r"기체|가스|산화|환원|촉매|농도|pH|녹는점|끓는점|어는점|녹|끓|증발|승화|실험|흄\s*후드|후드|폐액|"
+    r"결정|침전|증류|정제|추출|크로마토|적정|몰|금속|유기|무기|고분자|폭발|인화|발화|부식|비커|플라스크|"
+    r"피펫|뷰렛|chemical|reaction|solvent|acid|base", re.I)
+
+
+def detect_property(query: str) -> str | None:
+    """물질 이름 없이 성질로 물질을 묻는 질문이면 성질 키, 아니면 None."""
+    if extract_targets(query) or not _LIST_CUE.search(query):
+        return None
+    for key, spec in PROPERTY_QUERIES.items():
+        if re.search(spec["pattern"], query, re.I):
+            return key
+    return None
+
+
+def cas_valid(cas: str) -> bool:
+    """CAS 번호 검증 숫자(마지막 자리)가 맞는지 — LLM이 그럴듯하게 지어낸 번호를 1차로 거른다."""
+    m = re.fullmatch(r"(\d{2,7})-(\d{2})-(\d)", (cas or "").strip())
+    if not m:
+        return False
+    digits = (m.group(1) + m.group(2))[::-1]
+    return sum((i + 1) * int(d) for i, d in enumerate(digits)) % 10 == int(m.group(3))
+
+
+def has_codes(sds: dict, codes: list[str]) -> str | None:
+    """조회된 SDS의 유해·위험 문구에 codes 중 하나가 있으면 그 문구를, 없으면 None."""
+    if not sds.get("found"):
+        return None
+    pattern = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(map(re.escape, codes)) + r")(?!\d)")
+    for text in sds.get("hazard_statements", []) + sds.get("hazard_statements_en", []):
+        if pattern.search(text):
+            return text
+    return None
 
 
 # ── 한국어 유해·위험 문구 ────────────────────────────────────────────
@@ -276,7 +367,10 @@ _CHEM_SUFFIX = re.compile(
     r"에테르|아민|알코올|가스|용액|화합물|ine|ane|ene|ol|one|ide|ate|ite|acid|ium)$", re.I)
 _STOPWORDS = {"실험", "주의사항", "주의", "사용", "물질", "시약", "용액", "내일", "오늘", "이것", "그것",
               "저것", "이거", "그거", "합성", "제조", "결과", "방법", "보관", "폐기", "안전", "위험",
-              "중화", "반응", "희석", "가열", "장소", "학교", "회사", "집", "우리", "모두", "다음"}
+              "중화", "반응", "희석", "가열", "장소", "학교", "회사", "집", "우리", "모두", "다음",
+              # 실험 기구·보호구 — 이름이 '-드·-린' 등으로 끝나 물질로 잘못 잡히지 않게
+              "흄후드", "후드", "비커", "플라스크", "피펫", "뷰렛", "시험관", "장갑", "보안경", "실험복",
+              "마스크", "데시케이터", "오븐", "핫플레이트", "글러브박스", "샤워", "세안기"}
 
 # 여러 물질을 가리키는 약어 — 추측하지 않고 후보를 보여주며 되묻는다
 AMBIGUOUS_ABBR = {

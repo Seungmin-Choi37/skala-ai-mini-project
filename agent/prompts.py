@@ -14,21 +14,32 @@ SAFETY_KEYWORDS = re.compile(
 
 
 def keyword_route(query: str) -> str:
-    """질문에 안전 키워드가 있거나, 물질 이름이 보이면(사전 등록 여부와 무관) safety."""
-    if SAFETY_KEYWORDS.search(query) or chem_rules.extract_targets(query):
+    """LLM 없이(또는 LLM 답이 깨졌을 때) 쓰는 코드 분류.
+    물질 이름이 보이면 safety, 안전 키워드나 화학 표현이 보이면 knowledge, 아니면 chat."""
+    if chem_rules.extract_targets(query):
         return "safety"
+    if SAFETY_KEYWORDS.search(query) or chem_rules.CHEM_CUE.search(query):
+        return "knowledge"
     return "chat"
+
+
+# 이전 질문의 물질을 이어받는 짧은 후속 질문("그럼 보관은?")
+FOLLOW_UP = re.compile(r"^\s*(그럼|그러면|그리고|그건|그거|그것|이건|이거|저건|그 물질|그 시약|"
+                       r"보관|폐기|응급|보호구|취급)")
 
 
 ROUTE_SYSTEM = (
     "당신은 화학 실험실 안전 지원 라우터다. 사용자 요청을 분류하라. "
-    "화학물질 이름이 나오거나, 화학물질의 위험성·취급·보관·폐기·보호구·응급조치·혼합 가능 "
-    "여부를 묻거나, 화학물질을 사용·합성·섭취하려 한다고 말하면 route=safety, "
-    "인사·잡담·일반 질문이면 route=chat. "
+    "특정 화학물질 이름이나 CAS 번호가 나오고 그 물질의 위험성·취급·보관·폐기·보호구·응급조치·혼합 "
+    "가능 여부를 묻거나, 그 물질을 사용·합성·섭취하려 한다고 말하면 route=safety. "
+    "특정 물질 이름 없이 화학·실험실 안전에 관한 일반 질문(개념, 원리, 어떤 성질의 물질 예시, "
+    "실험 기구·절차의 안전 등)이면 route=knowledge. "
+    "인사·잡담·화학과 관계없는 질문이면 route=chat. "
     "needs_analysis는 물질이 2종 이상이라 혼촉 점검이 필요할 때만 true."
 )
 ROUTE_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: '
-                   '{"route": "chat" 또는 "safety", "needs_analysis": true 또는 false}')
+                   '{"route": "chat" 또는 "safety" 또는 "knowledge", "needs_analysis": true 또는 false}')
+ROUTES = ("chat", "safety", "knowledge")
 
 
 def plan_system() -> str:
@@ -47,12 +58,73 @@ PLAN_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: {"needs_analysis":
                   '"tasks": [{"agent": "research"|"analysis", "target": string(선택), '
                   '"target_en": string(선택)}]}')
 
-CHAT_SYSTEM = ("당신은 화학 실험실 안전 도우미다. 한국어로 한두 문장으로 간결하게 답하라. "
+CHAT_SYSTEM = ("당신은 화학 실험실 안전 도우미다. 한국어로 두세 문장으로 간결하게 답하라. "
                "대화 이력에서 사용자가 밝힌 이름이 있으면 정확히 기억해 답하라. "
-               "모르는 단어·약어·질문에는 추측하지 말고 '알 수 없다'고 말한 뒤 정식 이름이나 "
-               "CAS 번호로 다시 물어봐 달라고 하라. "
-               "화학물질 안전 정보는 추측해서 말하지 말고, 물질명을 알려주면 안내문을 "
-               "작성해 준다고 안내하라.")
+               "인사·감사에는 짧게 답하고, 화학물질 이름이나 화학 질문을 알려주면 도와준다고 안내하라. "
+               "화학·실험실 안전과 관계없는 질문이나 모르는 단어·약어에는 추측하지 말고 "
+               "'알 수 없습니다. 이 서비스는 화학물질과 실험실 안전에 관한 질문에만 답합니다.'라고 답하라.")
+
+
+# ── 성질로 물질 찾기: LLM은 후보만 낸다. 답에 들어갈지는 코드가 SDS 자료로 정한다 ──
+SUGGEST_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: {"candidates": [{"name_ko": string, '
+                     '"name_en": string, "cas": string}]}')
+
+
+def suggest_system(label: str, codes: list[str]) -> str:
+    return (
+        "당신은 화학 실험실 안전 담당자다. 실험실에서 흔히 쓰이며 GHS 분류상 "
+        f"'{label}'({', '.join(codes)})에 해당하는 대표적인 화학물질을 최대 8개 제안하라. "
+        "각 항목에 한국어명, 영문명, CAS 번호를 넣어라. CAS 번호가 확실하지 않은 물질은 넣지 마라. "
+        "제조법·합성 경로·용도는 쓰지 마라. 네 제안은 SDS 자료로 하나씩 확인한 뒤에만 사용자에게 보인다."
+    )
+
+
+def normalize_candidates(raw: dict, limit: int = 8) -> list[dict]:
+    """모델 제안을 정리한다 — CAS 형식·검증 숫자가 틀린 항목과 중복은 버린다."""
+    out, seen = [], set()
+    for c in (raw or {}).get("candidates", []) or []:
+        if not isinstance(c, dict):
+            continue
+        cas = str(c.get("cas") or "").strip()
+        if not chem_rules.cas_valid(cas) or cas in seen:
+            continue
+        seen.add(cas)
+        out.append({"name": str(c.get("name_ko") or c.get("name_en") or cas).strip()[:40], "cas": cas})
+        if len(out) >= limit:
+            break
+    return out
+
+
+# ── 일반 화학 질문(knowledge): LLM이 설명하고, 답에 나온 물질은 코드가 SDS로 확인한다 ──
+UNKNOWN_REPLY = "알 수 없습니다. 이 서비스는 화학물질과 실험실 안전에 관한 질문에만 답합니다."
+
+KNOWLEDGE_SYSTEM = (
+    "당신은 화학 실험실 안전 담당자다. 특정 물질 이름이 없는 일반 화학·실험실 안전 질문에 한국어로 "
+    "3~6문장으로 답하라. 교과서 수준의 일반 지식으로 개념·원리를 설명하고, 필요하면 대표적인 물질 "
+    "예를 들어라. 답에서 언급한 화학물질은 substances에 한국어명·영문명·CAS 번호와 함께 넣어라 — "
+    "CAS 번호가 확실하지 않은 물질은 넣지 마라. 이 물질들은 코드가 SDS로 하나씩 확인해 사용자에게 표시한다. "
+    "인화점·노출기준·독성값·농도 같은 안전 수치와 H코드는 쓰지 마라(물질별 수치는 SDS로 확인하도록 "
+    "안내된다). 합성 경로·반응 조건·시약 비율·제조 절차는 어떤 경우에도 쓰지 마라. "
+    "확실하지 않은 내용은 추측하지 말고 모른다고 써라. 화학·실험실 안전과 관계없는 질문이면 answer에 "
+    f"'{UNKNOWN_REPLY}'라고만 쓰고 substances는 비워라."
+)
+KNOWLEDGE_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: {"answer": string, "substances": '
+                       '[{"name_ko": string, "name_en": string, "cas": string}]}')
+
+
+def knowledge_user(query: str, history: list[dict], feedback: str | None) -> str:
+    user = chat_user(query, history)
+    if feedback:
+        user += f"\n\n## 이전 답에 대한 점검 반려 사유 (반드시 반영)\n{feedback}"
+    return user
+
+
+def normalize_knowledge(raw: dict) -> dict:
+    """모델 답을 정리한다 — 답 문장은 그대로, 물질은 CAS 검증을 통과한 것만(최대 6개)."""
+    raw = raw if isinstance(raw, dict) else {}
+    answer = str(raw.get("answer") or "").strip()
+    substances = normalize_candidates({"candidates": raw.get("substances")}, limit=6)
+    return {"answer": answer, "substances": substances}
 
 
 def chat_user(query: str, history: list[dict]) -> str:

@@ -37,7 +37,7 @@ echo "requirements.txt 설치 중..."
 
 echo
 echo "설치 확인:"
-./.venv/bin/python3 -c "import fastapi, uvicorn, langgraph, langsmith, fastmcp, mcp, httpx, dotenv; print('  필요 패키지 전부 import 성공')"
+./.venv/bin/python3 -c "import fastapi, uvicorn, langgraph, langsmith, fastmcp, mcp, httpx, dotenv, pytest; print('  필요 패키지 전부 import 성공')"
 
 cat <<EOF
 
@@ -52,4 +52,7 @@ cat <<EOF
 
 Ollama를 처음 쓰거나 모델을 다시 받아야 하면 먼저:
   bash sh/setup_ollama.sh
+
+코드를 고친 뒤 기존 기능 확인:
+  bash sh/run_tests.sh
 EOF

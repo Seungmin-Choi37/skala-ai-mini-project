@@ -55,6 +55,7 @@ printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env
   1~3분 걸리고, 마지막에 **`필요 패키지 전부 import 성공`**이 나오면 성공이다.
 - 둘째 줄: 설정 파일 `.env`를 만든다. fake 모드는 내용을 고칠 필요가 없다.
   OpenAI를 쓸 때만 `.env`를 열어 `OPENAI_API_KEY=` 뒤에 본인 키를 넣는다.
+  **`.env`가 이미 있으면 둘째 줄은 실행하지 않는다**(덮어써서 넣어 둔 키가 지워진다).
 
 설정이 맞는지 확인한다.
 
@@ -144,6 +145,8 @@ python web_demo_server.py
 | `자일렌을 합성할거야` | 노란 띠: 합성 절차는 안내하지 않음 + 자일렌 안전 정보 |
 | `질산을 마실거야` | 빨간 띠: 섭취 금지 + **119 신고 / 109 상담** 버튼(휴대폰에서 누르면 바로 전화) |
 | `그럼 보관은?` | 바로 앞 질문의 물질을 이어받아 답한다 |
+| `금속나트륨이랑 염산 같이 보관해도 돼?` | 물 반응성×산 **위험** + 노란 띠 "섞지 않아도 주의"(물·습기 금지) |
+| `다이에틸에테르 써도 돼?` | 노란 띠: 오래 두면 폭발성 과산화물이 생김 — 개봉일 기록 |
 | `DMA` | **확인할 수 없는 물질** 카드 + 후보 버튼 2개 — 누르면 그 물질로 다시 확인한다 |
 | `날씨 어때?` | "알 수 없습니다" — 화학물질 안전 안내만 한다고 답한다 |
 
@@ -151,7 +154,8 @@ python web_demo_server.py
    (질문 분류 → 계획 → 점검 범위 → SDS 조회 → 지침 보충 → 혼촉 점검 → 작성 → 검수).
    **과정 보기**를 누르면 단계별 기록과, 검수에서 반려된 초안까지 볼 수 있다.
 5. 결과는 **사용 전 안전 라벨** 카드로 나온다.
-   - **물질별 줄**: GHS 그림문자(빨간 마름모), 신호어(위험/경고), CAS 번호, 주요 유해·위험 문구
+   - **노란 띠**: 섞지 않아도 위험한 성질(과산화물 생성, 물 반응성)이 있으면 물질별로 표시
+   - **물질별 줄**: GHS 그림문자(빨간 마름모), 신호어(위험/경고), CAS 번호, 주요 유해·위험 문구(한국어)
    - **같이 쓸 때**: 물질이 2종 이상이면 모든 쌍을 점검한다. 빨강 = 위험, 초록 = 규칙상 위험 없음, 회색 = 확인 못 해 점검 불가
    - **보호구**: 공통 + 유해성 유형별 보호구
    - **응급조치 / 취급·보관·폐기 / 안내문 전문**: 눌러서 펼친다
@@ -168,9 +172,12 @@ python web_demo_server.py
   이름 사전 `data/name_map.json`의 약 40종(자일렌·헥산·에탄올·황산·락스·니트로글리세린 등) +
   CAS 번호(예: `64-17-5`).
 - 사전에 없는 한국어 이름(예: 아니솔)은 PubChem이 한국어를 몰라 조회하지 못한다. 영문명이나 CAS로
-  물어보거나, 사전에 추가하거나([물질·규칙 추가하기](#물질규칙-추가하기)), 실모델(Ollama/OpenAI)을 쓴다.
-- fake 모드에서는 PubChem에서 가져온 내용(응급조치 등)이 **영어 원문 그대로** 나온다.
-  실모델을 쓰면 한국어로 정리된다.
+  물어보거나, 사전에 추가하거나([물질·규칙 추가하기](#물질규칙-추가하기)),
+  안전보건공단 MSDS를 켠다([KOSHA 켜기](#안전보건공단kosha-msds-켜기)).
+- PubChem의 유해·위험 문구(H코드)는 한국어 표로 바꿔 보여준다. 응급조치·취급 문장은 뜻이 바뀌지
+  않도록 **영어 원문 그대로** 둔다(fake 모드). 실모델을 쓰면 한국어로 정리된다.
+- 물질을 확인하지 못해도 이름만으로 아는 위험 조합(락스+암모니아 등)은 "이름만으로도 알 수 있는 위험"으로 알린다.
+- 한 번 찾은 물질은 `lookup_cache.db`에 30일 보관해 다음부터 바로 나온다.
 
 ### 7단계. 끄기
 
@@ -222,7 +229,7 @@ python --version
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Set-Content .env "CHEM_DATA_MODE=live`nOPENAI_API_KEY="
+if (!(Test-Path .env)) { Set-Content .env "CHEM_DATA_MODE=live`nOPENAI_API_KEY=" }
 ```
 
 `Activate.ps1` 실행이 막히면 먼저 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`를 실행하고 `Y`.
@@ -246,8 +253,19 @@ python web_demo_server.py
 
 ---
 
-> 📘 curl로 직접 호출하기, Ollama/OpenAI 실모델 실행, 서버 재시작 후 대화 기억 확인 등 더 자세한 내용은
-> **[doc/run_guide.md](doc/run_guide.md)**, 질문별 기대 결과는 [doc/test_queries.md](doc/test_queries.md).
+> 📘 curl로 직접 호출하기, KOSHA 연결 확인, Ollama/OpenAI 실모델 실행, 서버 재시작 후 대화 기억 확인 등
+> 더 자세한 내용은 **[doc/run_guide.md](doc/run_guide.md)**, 질문별 기대 결과는 [doc/test_queries.md](doc/test_queries.md).
+
+## 자동 테스트
+
+코드를 고친 뒤에는 아래 한 줄로 기존 기능이 그대로인지 확인한다(인터넷·API 키 불필요, 약 15초).
+
+```bash
+bash sh/run_tests.sh
+```
+마지막 줄이 `NN passed`면 통과다. 규칙(물질 인식·혼촉·한국어 문구), 검수(지어낸 수치 반려),
+조회(PubChem·KOSHA 파서와 캐시), LLM 비동기·스트리밍, 그래프 전체 흐름, 서버+MCP 연결을 확인한다.
+자세한 목록은 [doc/run_guide.md의 8번](doc/run_guide.md#8-자동-테스트).
 
 ## 실행 모드
 
@@ -263,7 +281,7 @@ python web_demo_server.py
 
 | 값 | 동작 |
 |---|---|
-| `live` (기본) | **PubChem** 실시간 조회(무료, API 키 불필요). 한국어 이름은 `data/name_map.json`으로 CAS를 찾아 조회. 인터넷이 안 되면 샘플 6종은 샘플 데이터로 대신한다 |
+| `live` (기본) | ① **안전보건공단 MSDS**(`DATA_GO_KR_API_KEY`가 있을 때, 한국어 원문) → ② **PubChem**(무료, 키 불필요. 한국어 이름은 `data/name_map.json`으로 CAS를 찾아 조회) → ③ 둘 다 실패하면 샘플 6종은 샘플 데이터로 대신한다. 찾은 결과는 `lookup_cache.db`에 30일 캐시 |
 | `sample` | `data/substances.json`의 6종만 조회. 인터넷 불필요(오프라인 데모용) |
 
 ## 파이프라인 (agent/graph.py)
@@ -282,10 +300,10 @@ route ─ chat ──▶ chat_answer ─▶ 끝
 | gate | 물질 2종 이상이면 혼촉 점검을 반드시 넣고, 1종이면 뺀다 | 코드 |
 | research | MCP Tool `get_substance_safety`(SDS)와 Resource `safety-guide://hazard/{type}`(지침)를 병렬 호출, 일시 오류 재시도. 약어는 추측해 조회하지 않는다 | 코드 |
 | replan_check | 지침이 없으면 GHS 분류(H코드)에서 유해성 유형을 판정해 유형별 지침 추가 조사 | 코드 |
-| analysis | 혼촉 규칙표로 물질 쌍 판정(산화제×인화성, 락스×산, 시안화물×산, 산×염기 등). 확인하지 못한 물질은 "점검 불가"로 밝힌다 | 코드 |
+| analysis | 혼촉 규칙표(14가지)로 물질 쌍 판정 — 산화제×인화성, 산화제×유기물, 락스×산·암모니아·유기용매, 시안화물×산, 물 반응성×산·수용액, 알칼리 금속×할로젠화 용매, 과산화물×케톤, 은 화합물×암모니아, 산×염기 등. 확인하지 못한 물질은 "점검 불가"로 밝힌다 | 코드 |
 | write | 수집된 사실만으로 안내문 작성. 하나도 확인하지 못했으면 `[확인 불가]`로 짧게 답한다 | LLM |
-| validate | 6개 항목·출처·물질 누락, 섭취 시 119 경고, 합성 시 "합성 절차 미안내" 문구를 검사 | 코드 |
-| finalize | 안내문 텍스트와 함께 화면용 구조화 데이터(`notice`: 그림문자 코드·신호어·혼촉 쌍·보호구·약어 후보)를 만들어 보낸다 | 코드 |
+| validate | 6개 항목·출처·물질 누락, 섭취 시 119 경고, 합성 시 "합성 절차 미안내" 문구, **수집된 자료에 없는 수치(°C·%·ppm 등)·H코드**를 검사 | 코드 |
+| finalize | 안내문 텍스트와 함께 화면용 구조화 데이터(`notice`: 그림문자 코드·신호어·혼촉 쌍·단독 주의·보호구·약어 후보)를 만들어 보낸다 | 코드 |
 
 fake 백엔드는 원본의 연출 두 가지를 유지한다 — plan이 1종일 때도 혼촉 점검을 끼워 넣는 자기모순(→ gate가
 제거), write 1차 초안을 일부러 부실하게(→ validate 반려 후 재작성). 첫 SDS 조회 1회는 일부러
@@ -295,13 +313,15 @@ fake 백엔드는 원본의 연출 두 가지를 유지한다 — plan이 1종�
 
 | 구분 | 원본 (장애 대응) | 이 프로젝트 (화학안전) |
 |---|---|---|
-| MCP Tool | `get_monitoring_status` | `get_substance_safety` (live/sample), `get_kosha_msds`(확장 자리) |
+| MCP Tool | `get_monitoring_status` | `get_substance_safety` (KOSHA → PubChem → 샘플), `get_kosha_msds`(KOSHA 단독 확인용) |
 | MCP Resource | `runbook://incident-response/{type}` | `safety-guide://hazard/{type}` 9종 |
 | MCP Prompt | `incident_analysis_prompt` | `safety_notice_prompt` |
 | 데이터 | `monitoring.json`, runbook 6종 | `substances.json`, `name_map.json`, `safety_guides/` 9종 |
 | gate | needs_analysis=False면 analysis 제거 | 물질 수로 혼촉 점검 추가/제거 |
 | analysis | LLM이 시스템 패턴 비교 | 코드 규칙표로 혼촉 판정 |
-| validate | 30자 이상 + "1)" | 6개 항목·출처·물질 누락·의도 경고 검사 |
+| validate | 30자 이상 + "1)" | 6개 항목·출처·물질 누락·의도 경고 + 근거 없는 수치·H코드 검사 |
+| LLM 호출 | 동기 `httpx.post`(응답 기다리는 동안 서버 전체가 멈춤) | 비동기 `httpx.AsyncClient` + OpenAI 스트리밍 |
+| 테스트 | 없음 | `tests/` pytest 70여 개 |
 | 공통 코드 | 프롬프트·계획 보정이 ollama/openai에 복붙 | `agent/prompts.py`로 통합 |
 | 도메인 규칙 | 노드 안에 흩어짐 | `agent/chem_rules.py`에 모음 |
 
@@ -317,8 +337,10 @@ chem_safety_agent/
 ├── mcp_server_docs.py     # MCP 서버 "docs" — 멀티 서버 탐색 데모용 decoy (사용 안 함)
 ├── agent/
 │   ├── graph.py           # LangGraph 노드·간선
-│   ├── chem_rules.py      # 물질명·약어 인식, 의도 인식, H코드 분류, 혼촉 규칙, 보호구
+│   ├── chem_rules.py      # 물질명·약어 인식, 의도 인식, H코드 분류·한국어 문구, 반응성 태그, 혼촉 규칙, 단독 주의, 보호구
+│   ├── kosha.py           # 안전보건공단 MSDS Open API 조회·파싱 (DATA_GO_KR_API_KEY가 있을 때)
 │   ├── pubchem.py         # PubChem 조회·파싱 (live 모드)
+│   ├── cache.py           # 조회 결과 영구 캐시 (SQLite, lookup_cache.db)
 │   ├── prompts.py         # ollama/openai 공용 프롬프트·계획 보정·의도 경고
 │   ├── fake_llm.py / ollama_llm.py / openai_llm.py
 │   ├── mcp_client.py      # 다중 MCP 세션 + find_prompt/find_resource_template
@@ -327,8 +349,10 @@ chem_safety_agent/
 ├── data/
 │   ├── substances.json    # 샘플 SDS 요약 6종 (sample 모드·오프라인 대체용)
 │   ├── name_map.json      # 한국어 이름 → 영문명·CAS 사전 (live 모드 조회용) + 혼촉 판정 tag
+│   ├── h_statements_ko.json  # GHS H코드 → 한국어 유해·위험 문구 표
 │   └── safety_guides/     # explosive·water-reactive·oxidizer·flammable·toxic·corrosive·health-hazard·irritant·general
-├── sh/                    # setup_venv · setup_ollama · run_agent_fake/ollma/openai · run_frontend · make_student_zip
+├── tests/                 # pytest — 규칙·검수·조회·LLM·그래프·서버 (bash sh/run_tests.sh)
+├── sh/                    # setup_venv · setup_ollama · run_agent_fake/ollma/openai · run_frontend · run_tests · make_student_zip
 └── doc/                   # run_guide.md(상세 실행), test_queries.md, images/
 ```
 
@@ -338,30 +362,40 @@ chem_safety_agent/
 ```json
   "anisole": {"name_ko": "아니솔", "name_en": "Anisole", "cas": "100-66-3", "aliases": ["아니솔", "anisole"], "tags": ["organic-solvent"]},
 ```
-  `tags`는 혼촉 판정용이다(`acid`·`base`·`organic-solvent`·`oxidizing-acid`·`hypochlorite`·`ammonia`·`cyanide`·`explosive`·`water-reactive`).
+  `tags`는 혼촉 판정용이다 — `acid`·`oxidizing-acid`·`base`·`ammonia`·`hypochlorite`·`cyanide`·
+  `organic-solvent`·`organic`·`halogenated`·`ketone`·`oxidizer`·`peroxide`·`peroxide-former`·`reducer`·
+  `water-reactive`·`alkali-metal`·`aqueous`(물이 든 시약)·`silver`·`explosive`.
+  live 모드에서는 PubChem의 반응성 분류(Reactive Group)와 H코드에서도 태그를 자동으로 더한다.
   CAS 번호는 반드시 공식 자료에서 확인해 넣는다.
 - **약어 추가**: 여러 물질을 가리키는 약어는 `agent/chem_rules.py`의 `AMBIGUOUS_ABBR`에 후보와 함께 넣는다.
 - **오프라인 샘플 추가**: `data/substances.json`에 GHS 정보까지 넣으면 인터넷 없이도 조회된다.
-- **혼촉 규칙 추가**: `agent/chem_rules.py`의 `INCOMPATIBILITY_RULES`에 (조건 A, 조건 B, 위험, 권고)를 추가.
+- **혼촉 규칙 추가**: `agent/chem_rules.py`의 `INCOMPATIBILITY_RULES`에 (규칙 id, 조건 A, 조건 B, 위험, 권고)를 추가.
+  더 구체적인 규칙과 겹치면 `_REDUNDANT`에 등록해 같은 쌍에 중복 경고가 나오지 않게 한다.
+- **단독 주의 추가**: `SOLO_CAUTIONS`에 (태그: 문구)를 추가하면 그 태그를 가진 물질에 노란 띠가 뜬다.
+- **한국어 H문구 추가**: `data/h_statements_ko.json`에 코드와 공식 문구를 넣는다. 표에 없는 코드는 영어 그대로 나온다.
 - **지침 추가**: `data/safety_guides/{유형}.md` 작성 후 `HAZARD_LABELS`·`_H_CODE_RULES`에 유형 등록.
   `보호구:`·`보관:`·`폐기:`로 시작하는 줄은 fake 안내문에 그대로 인용된다.
 
-추가한 뒤에는 터미널 ①의 백엔드를 `Ctrl + C`로 끄고 다시 켜야 반영된다.
+추가한 뒤에는 터미널 ①의 백엔드를 `Ctrl + C`로 끄고 다시 켜야 반영되고, `bash sh/run_tests.sh`로 기존 기능을 확인한다.
 
-## 확장: 안전보건공단(KOSHA) MSDS Open API
+## 안전보건공단(KOSHA) MSDS 켜기
 
-공공데이터포털 "한국산업안전보건공단_물질안전보건자료 조회 서비스"(개발계정 자동승인, 무료, XML)를
-붙일 자리로 `mcp_server.py`에 `get_kosha_msds` Tool이 만들어져 있다(현재는 `available: false` 반환).
-KOSHA는 한국어 물질명으로 조회되므로, 붙이면 사전에 없는 한국어 이름 문제도 해결된다.
+공공데이터포털의 "한국산업안전보건공단_물질안전보건자료(MSDS)" API(개발계정 자동 승인, 무료)를 붙여 두었다.
+KOSHA는 **한국어 물질명으로 조회**되고 문구가 한국어 원문이라, 켜면 live 모드에서 PubChem보다 먼저 쓴다.
 
-1. `.env`에 `DATA_GO_KR_API_KEY=발급받은키` (코드나 깃에 키를 직접 쓰지 않는다)
-2. 포털 마이페이지의 활용가이드에서 요청주소·상세기능(물질 검색 → 항목별 상세)·파라미터 확인
-3. `get_kosha_msds`를 구현해 `get_substance_safety`와 같은 dict 모양으로 반환
-4. `get_substance_safety`에서 KOSHA → (실패 시) PubChem → (실패 시) sample 순으로 조회
+1. https://www.data.go.kr 에서 활용신청 → 마이페이지에서 인증키 복사
+2. `.env`에 `DATA_GO_KR_API_KEY=발급받은키` 한 줄 추가 (코드·문서·깃·화면 캡처에 키를 넣지 않는다)
+3. 백엔드를 다시 켠다. 출처가 "안전보건공단 MSDS"로 나오면 동작하는 것이다
+
+> ⚠️ `agent/kosha.py`는 공개 명세를 보고 만들었고 **실제 서버로는 아직 시험하지 못했다.**
+> 처음 켤 때 [doc/run_guide.md의 6-3 연결 확인](doc/run_guide.md#6-3-연결-확인)을 한 번 실행한다.
+> KOSHA가 실패하면 이유를 메모로 남기고 PubChem으로 자동으로 넘어가므로 서비스는 멈추지 않는다.
+> 끄려면 `.env`에 `KOSHA_ENABLED=0`.
 
 ## 참고
 
 - PubChem PUG-View: `https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON?heading=...`
-  — `agent/pubchem.py`는 `GHS Classification`, `First Aid Measures`, `Handling and Storage` 세 섹션만 받는다.
-  호출 빈도 제한이 있어 결과를 캐시한다.
-- 공공데이터포털 KOSHA MSDS: https://www.data.go.kr/data/15157612/openapi.do
+  — `agent/pubchem.py`는 `GHS Classification`, `First Aid Measures`, `Handling and Storage`, `Reactive Group`
+  네 섹션만 받는다. 호출 빈도 제한이 있어 결과를 SQLite에 캐시한다.
+- 공공데이터포털 KOSHA MSDS: https://www.data.go.kr/data/15001197/openapi.do
+- 한국어 H문구: 고용노동부 고시 「화학물질의 분류·표시 및 물질안전보건자료에 관한 기준」

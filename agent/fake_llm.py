@@ -4,6 +4,8 @@
 응답을 돌려준다. 원본(장애 대응)에서 재현하던 두 가지 연출을 그대로 유지한다.
 - plan  : 물질이 1종이어도 analysis task를 끼워 넣는 '모델의 자기모순' → gate가 제거
 - write : 1차 초안은 일부러 부실하게 → validate가 반려 → 2차에 형식을 갖춘 안내문
+
+모든 메서드는 실모델 백엔드(ollama/openai)와 똑같이 async다 — 그래프는 백엔드를 가리지 않고 await한다.
 """
 import re
 
@@ -28,12 +30,12 @@ class FastLLM(FakeLLM):
     """분류·계획 등 짧고 정형적인 단계 전담 (저비용)."""
 
     @traceable(run_type="llm", name="fast_llm.route")
-    def route(self, query: str) -> tuple[dict, dict]:
+    async def route(self, query: str) -> tuple[dict, dict]:
         result = {"route": keyword_route(query), "needs_analysis": False}
         return result, self._usage(query, str(result))
 
     @traceable(run_type="llm", name="fast_llm.plan")
-    def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
+    async def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
         tasks = [_research_task(i, t["target"], t["label"], t["lookup"])
                  for i, t in enumerate(chem_rules.extract_targets(query))]
         tasks.append({"id": "task-analysis", "agent": "analysis",
@@ -114,6 +116,10 @@ def compose_notice(collected: list[dict]) -> str:
     if sds and not ok:   # 조회한 물질을 하나도 확인하지 못함 — 모른다고 짧게 답하고 되묻는다
         out.append("[확인 불가] " + " · ".join(s.get("query", "?") for s in sds))
         out += [f"- {s.get('query')}: {s.get('reason')}" for s in missing]
+        # 자료는 못 찾았어도 이름만으로 아는 위험 조합(락스+암모니아 등)은 반드시 알린다
+        for c in chem_rules.check_incompatibility(sds):
+            out.append(f"- 같이 쓸 때 위험(이름으로 판정): {' + '.join(c['pair'])} — {c['warning']}. "
+                       f"{c['advice']}.")
         out.append("- 확인되지 않은 물질에 대해 유해성·취급법을 추측해서 안내하지 않습니다. "
                    "사용 전에 반드시 공식 SDS(KOSHA MSDS·제조사 SDS)를 확인하세요.")
         return "\n".join(out)
@@ -149,6 +155,7 @@ def compose_notice(collected: list[dict]) -> str:
     handling = [f"{chem_rules.display_name(s)}: {s['handling']}" for s in ok if s.get("handling")]
     if len(handling) < len(ok):   # PubChem에 취급 항목이 없으면 유형별 지침으로 보완
         handling += [f"공통: {step}" for step in _guide_steps(guides)]
+    handling += [f"{c['name']} 단독 주의: {c['text']}" for c in chem_rules.solo_cautions(sds)]
     out.append("3) 취급 주의 — " + (" / ".join(handling) or "공식 SDS 7항(취급 및 저장)을 확인하세요."))
 
     if len(sds) < 2:
@@ -171,7 +178,9 @@ def compose_notice(collected: list[dict]) -> str:
     src = []
     if any(s.get("source") == "sample" for s in ok):
         src.append("샘플 데이터(data/substances.json, 교육용 요약)")
-    src += [s["source_url"] for s in ok if s.get("source_url")]
+    if any(s.get("source") == "kosha" for s in ok):
+        src.append("안전보건공단 MSDS(msds.kosha.or.kr)")
+    src += [s["source_url"] for s in ok if s.get("source_url") and s.get("source") != "kosha"]
     src += ["취급 지침(data/safety_guides)"] if guides else []
     out.append("출처: " + ", ".join(src or ["(조회된 자료 없음)"]) +
                " — 실제 사용 전 공식 SDS(KOSHA MSDS·제조사 SDS)로 반드시 확인하세요.")

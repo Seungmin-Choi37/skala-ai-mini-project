@@ -1,5 +1,5 @@
 {
-  "_comment": "샘플 데이터 — 교육·데모용 요약본이다. 농도·제조사에 따라 GHS 분류가 달라질 수 있으므로 실제 사용 전에는 반드시 공식 SDS(KOSHA MSDS, 제조사 SDS)로 확인할 것. CHEM_DATA_MODE=sample(기본)일 때 MCP Tool이 이 파일을 조회한다.",
+  "_comment": "샘플 데이터 — 교육·데모용 요약본이다. 농도·제조사에 따라 GHS 분류가 달라질 수 있으므로 실제 사용 전에는 반드시 공식 SDS(KOSHA MSDS, 제조사 SDS)로 확인할 것. CHEM_DATA_MODE=sample일 때, 그리고 live 모드에서 KOSHA·PubChem 조회가 실패했을 때 MCP Tool이 이 파일을 쓴다.",
   "toluene": {
     "name_ko": "톨루엔",
     "name_en": "Toluene",
@@ -40,7 +40,7 @@
       "H336 졸음 또는 현기증을 일으킬 수 있음"
     ],
     "hazard_classes": ["flammable", "irritant"],
-    "tags": ["organic-solvent"],
+    "tags": ["organic-solvent", "ketone"],
     "flash_point": "약 -20 °C",
     "first_aid": {
       "흡입": "신선한 공기가 있는 곳으로 옮긴다. 불편함이 지속되면 의료기관에 연락한다.",
@@ -89,7 +89,7 @@
       "H331 흡입하면 유독함"
     ],
     "hazard_classes": ["oxidizer", "corrosive", "toxic"],
-    "tags": ["acid", "oxidizing-acid"],
+    "tags": ["acid", "oxidizing-acid", "aqueous"],
     "flash_point": "해당 없음(불연성, 단 산화제)",
     "first_aid": {
       "흡입": "신선한 공기가 있는 곳으로 옮기고 즉시 의료기관에 연락한다. 폐부종 증상은 늦게 나타날 수 있다.",
@@ -113,7 +113,7 @@
       "H335 호흡기 자극을 일으킬 수 있음"
     ],
     "hazard_classes": ["corrosive", "irritant"],
-    "tags": ["acid"],
+    "tags": ["acid", "aqueous"],
     "flash_point": "해당 없음(불연성)",
     "first_aid": {
       "흡입": "신선한 공기가 있는 곳으로 옮기고 증상이 있으면 의료기관에 연락한다.",

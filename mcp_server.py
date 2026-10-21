@@ -5,9 +5,10 @@ FastAPI 백엔드(server.py)가 lifespan에서 이 파일을 subprocess(stdio)�
 
 - Tool     get_substance_safety : 물질명 → SDS 요약 (호출 시점에 조회하는 동적 데이터)
              CHEM_DATA_MODE=sample → data/substances.json 6종만
-             CHEM_DATA_MODE=live   → PubChem 실시간 조회(이름 사전으로 한국어명→CAS 변환),
-                                     실패 시 샘플이 있으면 샘플로 폴백
-- Tool     get_kosha_msds       : 안전보건공단 MSDS Open API 자리 (명세 확인 후 구현)
+             CHEM_DATA_MODE=live   → ① KOSHA MSDS(DATA_GO_KR_API_KEY가 있을 때, 한국어 원문)
+                                     ② PubChem(이름 사전으로 한국어명→CAS 변환)
+                                     ③ 둘 다 실패하면 샘플이 있을 때 샘플로 폴백
+- Tool     get_kosha_msds       : 안전보건공단 MSDS Open API 단독 조회 (확인·디버깅용)
 - Resource safety-guide://hazard/{hazard_type} : 유해성 유형별 취급 지침(정적 문서)
 - Prompt   safety_notice_prompt : 사용 전 안전 안내문 작성 표준 절차
 """
@@ -72,39 +73,74 @@ def get_substance_safety(name: str, lookup: str = "") -> dict:
         return _not_found(display, "샘플 데이터(6종)에 없는 물질 — .env의 CHEM_DATA_MODE=live로 "
                                    "바꾸면 PubChem에서 조회합니다", entry)
 
+    notes: list[str] = []
+
+    def with_notes(result: dict) -> dict:
+        if notes:
+            result["note"] = " / ".join(notes + ([result["note"]] if result.get("note") else []))
+        return result
+
+    # ① KOSHA — 한국어 이름도 바로 찾을 수 있고 문구가 한국어 원문이라 먼저 쓴다
+    from agent import kosha
+    cas = entry.get("cas") or (name if re.fullmatch(r"\d{2,7}-\d{2}-\d", name) else None)
+    korean = entry.get("name_ko") or (name if re.search(r"[가-힣]", name) else None)
+    if kosha.enabled() and (cas or korean):
+        try:
+            result = kosha.fetch_kosha(cas or korean, display, sid, cas=cas)
+            if result.get("found"):
+                return result
+            notes.append(result.get("reason", "KOSHA에서 찾지 못함"))
+        except Exception as exc:   # 인증 실패·한도 초과·네트워크 오류 → PubChem으로 넘어간다
+            notes.append(f"KOSHA 조회 실패({type(exc).__name__}: {str(exc)[:80]})")
+
+    # ② PubChem
     query = lookup or entry.get("cas") or entry.get("name_en")
     if not query and re.fullmatch(r"[A-Za-z0-9 ,()\-]+", name):
         query = name          # 영문명·CAS를 직접 입력한 경우
     if not query:
-        return sample or _not_found(
-            display, "PubChem은 한국어 이름을 모릅니다 — 영문명이나 CAS 번호로 다시 물어봐 주세요", entry)
+        if sample:
+            return with_notes(sample)
+        reason = "PubChem은 한국어 이름을 모릅니다 — 영문명이나 CAS 번호로 다시 물어봐 주세요"
+        if notes:
+            reason = f"{' / '.join(notes)} / {reason}"
+        return _not_found(display, reason, entry)
     from agent.pubchem import fetch_safety
     try:
         result = fetch_safety(query, display, sid)
     except Exception as exc:   # 네트워크 오류 등
+        notes.append(f"PubChem 호출 오류({type(exc).__name__})")
         if sample:
-            sample["note"] = f"PubChem 호출 오류({type(exc).__name__}) → 샘플 데이터 사용"
-            return sample
-        return _not_found(display, f"PubChem 호출 오류({type(exc).__name__}) — 인터넷 연결 확인", entry)
+            notes.append("샘플 데이터 사용")
+            return with_notes(sample)
+        return _not_found(display, " / ".join(notes) + " — 인터넷 연결 확인", entry)
     if not result.get("found"):
+        notes.append(result.get("reason", "PubChem에서 찾지 못함"))
         if sample:
-            sample["note"] = f"{result.get('reason')} → 샘플 데이터 사용"
-            return sample
-        result.update(name_ko=entry.get("name_ko"), tags=entry.get("tags", []))
-    return result
+            notes.append("샘플 데이터 사용")
+            return with_notes(sample)
+        return _not_found(display, " / ".join(notes), entry)
+    return with_notes(result)
 
 
 @mcp.tool()
 def get_kosha_msds(name: str) -> dict:
-    """안전보건공단 MSDS Open API 조회 (확장 지점 — 아직 파이프라인에서 호출하지 않음).
+    """안전보건공단 MSDS Open API 단독 조회 — 국문명 또는 CAS 번호.
 
-    공공데이터포털 활용가이드의 요청주소·파라미터를 확인한 뒤 구현한다.
+    파이프라인은 get_substance_safety 안에서 KOSHA를 먼저 쓰므로, 이 Tool은 연결 확인용이다.
     API 키는 .env의 DATA_GO_KR_API_KEY에서 읽는다(코드에 직접 쓰지 않음)."""
-    if not os.environ.get("DATA_GO_KR_API_KEY"):
-        return {"query": name, "available": False,
-                "reason": "DATA_GO_KR_API_KEY가 설정되지 않음"}
-    return {"query": name, "available": False,
-            "reason": "KOSHA API 요청 명세 확인 후 구현 예정 (README의 '확장: KOSHA' 참고)"}
+    from agent import kosha
+    if not kosha.enabled():
+        return {"query": name, "found": False, "available": False,
+                "reason": "DATA_GO_KR_API_KEY가 설정되지 않았거나 KOSHA_ENABLED=0"}
+    sid = chem_rules.resolve(name)
+    entry = chem_rules.CATALOG.get(sid or "", {})
+    cas = entry.get("cas") or (name if re.fullmatch(r"\d{2,7}-\d{2}-\d", name) else None)
+    try:
+        return {"available": True,
+                **kosha.fetch_kosha(cas or entry.get("name_ko") or name, name, sid, cas=cas)}
+    except Exception as exc:
+        return {"query": name, "found": False, "available": True,
+                "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
 @mcp.resource("safety-guide://hazard/{hazard_type}")

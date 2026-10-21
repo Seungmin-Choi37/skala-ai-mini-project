@@ -3,3 +3,7 @@
 session.db
 __pycache__/
 *.log
+
+# 조회 결과 캐시 (PubChem·KOSHA)
+lookup_cache.db
+.pytest_cache/

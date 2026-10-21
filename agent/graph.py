@@ -4,13 +4,15 @@ route → (chat 직행 | safety 파이프라인)
 safety: plan(MCP Prompt 절차 반영) → gate(혼촉 점검 필요 여부를 코드가 결정)
         → research(SDS Tool·지침 Resource 병렬 조회 + 재시도)
         → replan_check(지침이 없으면 GHS 유해성 유형을 판정해 지침 추가 조사)
-        → analysis(물질 2종 이상일 때 혼촉 규칙 판정) → write → validate(반려 시 재작성)
-        → finalize
+        → analysis(물질 2종 이상일 때 혼촉 규칙 판정) → write
+        → validate(형식·필수 문구 + 근거 없는 수치·H코드 검사, 반려 시 재작성) → finalize
 
 모든 노드는 SupervisorDeps를 functools.partial로 주입받는 순수 함수다.
 각 노드는 @traceable로 LangSmith에 계층 트리로 기록된다.
 """
 import asyncio
+import json
+import re
 import time
 from functools import partial
 from typing import TypedDict
@@ -66,7 +68,7 @@ def _sds(state: AgentState) -> list[dict]:
 @traceable(name="route_node")
 async def route_node(state: AgentState, deps: SupervisorDeps) -> dict:
     """모든 질문이 무거운 파이프라인을 탈 필요는 없다 — 인사·잡담은 바로 답한다."""
-    result, usage = deps.fast_llm.route(state["query"])
+    result, usage = await deps.fast_llm.route(state["query"])
     route = result["route"]
     event = {"type": "RouteDecided", "route": route}
     # 안전 우선 — 모델이 chat이라 해도 물질 이름이나 안전 키워드가 보이면 safety로 보낸다.
@@ -105,7 +107,7 @@ async def plan_node(state: AgentState, deps: SupervisorDeps) -> dict:
          "purpose": query},
         server=prompt_server,
     )
-    result, usage = deps.fast_llm.plan(query, procedure)
+    result, usage = await deps.fast_llm.plan(query, procedure)
     tasks = result["tasks"]
 
     # 후속 질문("그럼 보관은?")처럼 이번 질문에 물질이 없으면, 최근 사용자 질문에서 물질을 이어받는다
@@ -286,10 +288,40 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
                                           "length": len(draft)}]}
 
 
-def check_draft(draft: str, sds_list: list[dict], intent: dict | None = None) -> list[str]:
-    """안내문 검수 기준 — 통과하면 빈 리스트, 아니면 반려 사유 목록."""
+# 근거 확인 대상: 단위가 붙은 수치(인화점·농도·노출기준 등)와 GHS H코드.
+# 섹션 번호(1)~6)), 전화번호(119·109), '15분' 같은 일반 숫자는 검사하지 않는다.
+_UNIT_NUMBER = re.compile(
+    r"(?<![\w.])([-−–]?\d+(?:[.,]\d+)?)\s*(?:°\s*[CF]|℃|℉|%|ppm|ppb|mg/m3|mg/m³|mg/kg|mg/L|g/L|mmHg|kPa)",
+    re.I)
+_ANY_NUMBER = re.compile(r"[-−–]?\d+(?:[.,]\d+)?")
+_H_CODE = re.compile(r"(?<![A-Za-z0-9])((?:EUH|H)\d{3})")
+
+
+def _norm_number(n: str) -> str:
+    return n.replace("−", "-").replace("–", "-").replace(",", ".")
+
+
+def ungrounded(draft: str, evidence: str) -> tuple[list[str], list[str]]:
+    """안내문에 있지만 수집된 자료(evidence)에는 없는 (수치, H코드) — 모델이 지어낸 값 후보."""
+    known_numbers = {_norm_number(n) for n in _ANY_NUMBER.findall(evidence)}
+    known_codes = set(_H_CODE.findall(evidence))
+    numbers = [m.group(0).strip() for m in _UNIT_NUMBER.finditer(draft)
+               if _norm_number(m.group(1)) not in known_numbers]
+    codes = [c for c in _H_CODE.findall(draft) if c not in known_codes]
+    return list(dict.fromkeys(numbers)), list(dict.fromkeys(codes))
+
+
+def check_draft(draft: str, sds_list: list[dict], intent: dict | None = None,
+                evidence: str = "") -> list[str]:
+    """안내문 검수 기준 — 통과하면 빈 리스트, 아니면 반려 사유 목록.
+    evidence: SDS 외에 모델에게 준 자료(취급 지침·혼촉 판정 문장) — 수치 대조에 함께 쓴다."""
     intent = intent or {}
     problems = []
+    numbers, codes = ungrounded(draft, json.dumps(sds_list, ensure_ascii=False) + "\n" + evidence)
+    if numbers:
+        problems.append(f"수집된 자료에 없는 수치가 있습니다({', '.join(numbers)}) — 지어낸 값은 빼세요")
+    if codes:
+        problems.append(f"수집된 자료에 없는 H코드가 있습니다({', '.join(codes)}) — 지어낸 코드는 빼세요")
     if intent.get("ingest") and "119" not in draft:
         problems.append("섭취 의도가 있는데 '섭취 금지·119 연락' 경고가 없습니다")
     if intent.get("synthesis") and "합성 절차" not in draft:
@@ -301,6 +333,8 @@ def check_draft(draft: str, sds_list: list[dict], intent: dict | None = None) ->
         for s in sds_list:
             if (s.get("query") or "") not in draft:
                 problems.append(f"확인하지 못한 물질 '{s.get('query')}'을(를) 답에서 언급하지 않았습니다")
+        if chem_rules.check_incompatibility(sds_list) and "섞" not in draft:
+            problems.append("이름만으로 판정한 혼촉 위험(섞으면 안 되는 조합)을 답에 쓰지 않았습니다")
         return problems
     if len(draft) < 80 or "1)" not in draft:
         problems.append("'1) … 6)' 번호 형식의 안내문이 아닙니다")
@@ -321,10 +355,13 @@ def check_draft(draft: str, sds_list: list[dict], intent: dict | None = None) ->
 
 @traceable(name="validate_node")
 async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """코드 기준 검수: 6개 필수 항목·출처·조사 물질 누락 여부. 최대 3회 후 통과 처리."""
+    """코드 기준 검수: 6개 필수 항목·출처·조사 물질 누락 + 근거 없는 수치·H코드. 최대 3회 후 통과 처리."""
     attempts = state.get("validation_attempts", 0) + 1
-    intent = next((c["data"] for c in state.get("collected", []) if c["source"] == "intent"), {})
-    problems = check_draft(state["draft"], _sds(state), intent)
+    collected = state.get("collected", [])
+    intent = next((c["data"] for c in collected if c["source"] == "intent"), {})
+    evidence = "\n".join(c["data"] for c in collected
+                         if c["source"] in ("guide", "analysis") and isinstance(c["data"], str))
+    problems = check_draft(state["draft"], _sds(state), intent, evidence)
     ok = not problems
     verdict = "합격" if ok else "불합격"
     if not ok and attempts >= 3:   # 실모델 무한 재작성 방지
@@ -373,6 +410,7 @@ def build_notice(state: AgentState) -> dict:
         "checked_mix": len(sds) >= 2,
         "conflicts": state.get("conflicts", []),
         "unknown_mix": state.get("unknown_mix", []),
+        "cautions": chem_rules.solo_cautions(sds),   # 조회 실패여도 이름 사전 태그로 판정
         "ppe": chem_rules.ppe_for(found),
         "disposal": guide_lines("폐기:"),
         "accident": guide_lines("사고 시:"),

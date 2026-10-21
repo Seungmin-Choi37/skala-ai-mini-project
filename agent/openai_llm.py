@@ -3,8 +3,11 @@
 fast(기본 gpt-4o-mini)는 분류·계획·단순 대화, quality(기본 gpt-4o)는 안내문 작성 전담.
 ⚠️ 실제 과금이 발생하는 원격 API다.
 
-구조화 출력은 `response_format={"type": "json_object"}`(JSON 모드)로 강제한다 — 스키마까지
-강제하지는 않으므로 프롬프트에 필드를 명시하고 agent/prompts.py의 코드 보정을 거친다.
+- 모든 호출은 httpx.AsyncClient로 한다 — 응답을 기다리는 동안 서버의 다른 요청이 멈추지 않는다.
+- 사용자에게 보이는 글(대화 답변·안내문)은 stream=true로 받아 토큰이 오는 대로 화면에 흘린다.
+  분류·계획(JSON)은 부분 출력이 의미 없으므로 한 번에 받는다.
+- 구조화 출력은 `response_format={"type": "json_object"}`(JSON 모드)로 강제한다 — 스키마까지
+  강제하지는 않으므로 프롬프트에 필드를 명시하고 agent/prompts.py의 코드 보정을 거친다.
 
 사전 조건: 유효한 `OPENAI_API_KEY` 환경변수(.env).
 """
@@ -16,7 +19,7 @@ from langsmith import traceable
 
 from . import prompts
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_URL = os.environ.get("OPENAI_URL", "https://api.openai.com/v1/chat/completions")
 
 
 class OpenAILLM:
@@ -26,38 +29,75 @@ class OpenAILLM:
         self.usd_per_1k = usd_per_1k_tokens
         self.api_key = os.environ.get("OPENAI_API_KEY", "")
 
-    def _chat(self, system: str, user: str, json_mode: bool = False) -> tuple[str, dict]:
+    def _headers(self) -> dict:
         if not self.api_key:
             raise RuntimeError(
                 "OPENAI_API_KEY가 설정되지 않았습니다 — .env 또는 환경변수로 지정하세요."
             )
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "temperature": 0,
-        }
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+    def _payload(self, system: str, user: str) -> dict:
+        return {"model": self.model,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}],
+                "temperature": 0}
+
+    def _usage(self, tokens: int, system: str, user: str) -> dict:
+        return {"model": self.name, "tokens": tokens,
+                "usd": round(tokens / 1000 * self.usd_per_1k, 6),
+                "prompt": f"[SYSTEM]\n{system}\n\n[USER]\n{user}"}
+
+    async def _chat(self, system: str, user: str, json_mode: bool = False) -> tuple[str, dict]:
+        """한 번에 받는 호출 — 분류·계획(JSON)용."""
+        payload = self._payload(system, user)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-        headers = {"Authorization": f"Bearer {self.api_key}",
-                   "Content-Type": "application/json"}
-        resp = httpx.post(OPENAI_URL, json=payload, headers=headers, timeout=120.0)
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(OPENAI_URL, json=payload, headers=self._headers())
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", 0)
-        usage = {"model": self.name, "tokens": tokens,
-                 "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
-        return content, usage
+        return content, self._usage(tokens, system, user)
+
+    async def _chat_stream(self, system: str, user: str, on_token=None) -> tuple[str, dict]:
+        """스트리밍 호출 — 'data: {...}' 줄마다 delta.content를 받아 on_token으로 바로 넘긴다.
+        stream_options.include_usage를 켜면 마지막 조각에 토큰 사용량이 실려 온다."""
+        payload = {**self._payload(system, user), "stream": True,
+                   "stream_options": {"include_usage": True}}
+        chunks: list[str] = []
+        tokens = 0
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", OPENAI_URL, json=payload,
+                                     headers=self._headers()) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    body = line[len("data:"):].strip()
+                    if body == "[DONE]":
+                        break
+                    data = json.loads(body)
+                    if data.get("usage"):
+                        tokens = data["usage"].get("total_tokens", 0)
+                    for choice in data.get("choices") or []:
+                        piece = (choice.get("delta") or {}).get("content") or ""
+                        if piece:
+                            chunks.append(piece)
+                            if on_token is not None:
+                                on_token(piece)
+        return "".join(chunks), self._usage(tokens, system, user)
 
 
 class OpenAIFastLLM(OpenAILLM):
     """분류·계획·단순 대화 전담 (저비용 모델, 기본 gpt-4o-mini)."""
 
     @traceable(run_type="llm", name="openai_fast.route")
-    def route(self, query: str) -> tuple[dict, dict]:
+    async def route(self, query: str) -> tuple[dict, dict]:
         system = prompts.ROUTE_SYSTEM + " " + prompts.ROUTE_JSON_HINT
-        content, usage = self._chat(system, query, json_mode=True)
+        content, usage = await self._chat(system, query, json_mode=True)
         try:
             raw = json.loads(content)
             route = raw.get("route") if raw.get("route") in ("chat", "safety") else None
@@ -68,10 +108,10 @@ class OpenAIFastLLM(OpenAILLM):
         return result, usage
 
     @traceable(run_type="llm", name="openai_fast.plan")
-    def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
+    async def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
         system = prompts.plan_system() + " " + prompts.PLAN_JSON_HINT
         user = f"## 표준 절차\n{procedure_prompt}\n\n## 사용자 요청\n{query}"
-        content, usage = self._chat(system, user, json_mode=True)
+        content, usage = await self._chat(system, user, json_mode=True)
         try:
             raw = json.loads(content)
         except json.JSONDecodeError:
@@ -80,20 +120,8 @@ class OpenAIFastLLM(OpenAILLM):
 
     @traceable(run_type="llm", name="openai_fast.chat")
     async def chat(self, query: str, history: list[dict], on_token=None) -> tuple[str, dict]:
-        system = ("당신은 화학 실험실 안전 도우미다. 한국어로 한두 문장으로 간결하게 답하라. "
-                  "대화 이력에서 사용자가 밝힌 이름이 있으면 정확히 기억해 답하라. "
-                  "모르는 단어·약어·질문에는 추측하지 말고 '알 수 없다'고 말한 뒤 정식 이름이나 "
-                  "CAS 번호로 다시 물어봐 달라고 하라. "
-                  "화학물질 안전 정보는 추측해서 말하지 말고, 물질명을 알려주면 안내문을 "
-                  "작성해 준다고 안내하라.")
-        rendered = "\n".join(f"{m['role']}: {m['content']}" for m in history[-10:])
-        user = (f"## 지금까지의 대화\n{rendered or '(없음)'}\n\n"
-                f"## 사용자의 새 메시지\n{query}")
-        content, usage = self._chat(system, user)
-        usage["prompt"] = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
-        if on_token is not None:
-            on_token(content)
-        return content, usage
+        user = prompts.chat_user(query, history)
+        return await self._chat_stream(prompts.CHAT_SYSTEM, user, on_token=on_token)
 
 
 class OpenAIQualityLLM(OpenAILLM):
@@ -102,12 +130,5 @@ class OpenAIQualityLLM(OpenAILLM):
     @traceable(run_type="llm", name="openai_quality.write")
     async def write(self, query: str, collected: list[dict], attempt: int,
                     feedback: str | None, on_token=None) -> tuple[str, dict]:
-        user = (f"## 사용자 요청\n{query}\n\n## 수집된 사실\n"
-                f"{prompts.render_facts(collected)}")
-        if feedback:
-            user += f"\n\n## 이전 초안에 대한 검수 반려 사유 (반드시 반영)\n{feedback}"
-        content, usage = self._chat(prompts.WRITE_SYSTEM, user)
-        usage["prompt"] = f"[SYSTEM]\n{prompts.WRITE_SYSTEM}\n\n[USER]\n{user}"
-        if on_token is not None:
-            on_token(content)
-        return content, usage
+        user = prompts.write_user(query, collected, feedback)
+        return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)

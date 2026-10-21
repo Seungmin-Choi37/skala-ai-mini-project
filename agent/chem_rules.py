@@ -4,7 +4,10 @@
 - 물질 인식     : 카탈로그 별칭 매칭 + CAS 번호 + 사전에 없는 화학물질 이름 후보 추출
 - 의도 인식     : 섭취(마실/먹을)·합성(만들/합성) 의도 — 안내문 맨 앞 경고에 쓰인다
 - 유해성 유형   : GHS 유해·위험 문구(H코드)에서 hazard class를 뽑는다
+- 한국어 문구   : PubChem 영어 H문구를 data/h_statements_ko.json 표로 바꾼다
+- 성질 태그     : H코드·PubChem 'Reactive Group'(CAMEO 반응성 분류)에서 혼촉용 태그를 뽑는다
 - 혼촉 위험     : 물질 쌍마다 hazard class·tag 조합 규칙으로 판정
+- 단독 주의     : 섞지 않아도 위험한 성질(과산화물 생성, 물 반응성)을 물질별로 알린다
 - 보호구        : hazard class별 최소 보호구 목록
 """
 import json
@@ -25,6 +28,7 @@ def _load(name: str) -> dict:
 
 SUBSTANCES = _load("substances.json")      # GHS 데이터까지 있는 샘플 (sample 모드 조회 대상)
 CATALOG = {**_load("name_map.json"), **SUBSTANCES}   # 이름 인식용 전체 목록 (샘플이 우선)
+H_STATEMENTS_KO = _load("h_statements_ko.json")       # H코드 → 한국어 유해·위험 문구
 
 # 유해성 유형(= safety guide Resource 이름)과 화면 표시용 한국어 이름.
 # 순서가 우선순위다 — replan_check가 지침을 고를 때 위험한 것부터 고른다.
@@ -63,20 +67,134 @@ PPE_BY_CLASS = {
 }
 BASE_PPE = "보안경, 실험복, 니트릴 장갑"
 
-# 혼촉 규칙: (조건 A, 조건 B, 위험, 권고). 조건은 hazard class 또는 tag 이름.
+# 혼촉 규칙: (규칙 id, 조건 A, 조건 B, 위험, 권고). 조건은 hazard class 또는 tag 이름.
 KEEP_APART = "함께 섞거나 같은 곳에 보관하지 말 것"
 INCOMPATIBILITY_RULES = [
-    ("oxidizer", "flammable", "산화제와 인화성 물질이 만나면 화재·폭발 위험이 크다", KEEP_APART),
-    ("oxidizing-acid", "organic-solvent", "산화성 산(질산 등)과 유기용매는 격렬하게 반응할 수 있다",
+    ("oxidizer-flammable", "oxidizer", "flammable",
+     "산화제와 인화성 물질이 만나면 화재·폭발 위험이 크다", KEEP_APART),
+    ("oxidizing-acid-organic", "oxidizing-acid", "organic-solvent",
+     "산화성 산(질산 등)과 유기용매는 격렬하게 반응할 수 있다", KEEP_APART),
+    ("oxidizer-organic", "oxidizer", "organic",
+     "산화제가 유기물(글리세롤·글리콜·페놀 등)과 만나면 발열하거나 저절로 불이 붙을 수 있다", KEEP_APART),
+    ("reducer-oxidizer", "reducer", "oxidizer",
+     "강한 환원제(알칼리 금속 등)와 산화제가 만나면 격렬하게 반응해 불이 붙을 수 있다", KEEP_APART),
+    ("hypochlorite-acid", "hypochlorite", "acid",
+     "차아염소산염(락스 등)과 산이 만나면 유독한 염소 기체가 생긴다", KEEP_APART),
+    ("hypochlorite-ammonia", "hypochlorite", "ammonia",
+     "차아염소산염과 암모니아가 만나면 유독한 클로라민 기체가 생긴다", KEEP_APART),
+    ("hypochlorite-organic", "hypochlorite", "organic-solvent",
+     "차아염소산염과 일부 유기용매(아세톤·에탄올 등)가 만나면 클로로포름 같은 유해 물질이 생길 수 있다",
      KEEP_APART),
-    ("hypochlorite", "acid", "차아염소산염(락스 등)과 산이 만나면 유독한 염소 기체가 생긴다", KEEP_APART),
-    ("hypochlorite", "ammonia", "차아염소산염과 암모니아가 만나면 유독한 클로라민 기체가 생긴다",
+    ("cyanide-acid", "cyanide", "acid",
+     "시안화물과 산이 만나면 맹독성 시안화수소 기체가 생긴다", KEEP_APART),
+    ("water-reactive-acid", "water-reactive", "acid",
+     "물 반응성 물질(나트륨 등)과 산이 만나면 수소 같은 인화성 기체와 열이 격렬하게 생긴다", KEEP_APART),
+    ("water-reactive-aqueous", "water-reactive", "aqueous",
+     "물 반응성 물질이 수용액(물이 든 시약)과 닿으면 인화성 기체와 열이 생겨 불이 붙을 수 있다", KEEP_APART),
+    ("alkali-halogenated", "alkali-metal", "halogenated",
+     "알칼리 금속(나트륨 등)과 할로젠화 용매(클로로포름·다이클로로메테인)는 폭발적으로 반응할 수 있다",
      KEEP_APART),
-    ("cyanide", "acid", "시안화물과 산이 만나면 맹독성 시안화수소 기체가 생긴다", KEEP_APART),
-    ("acid", "base", "산과 염기를 섞으면 큰 중화열이 나고 튈 수 있다",
+    ("peroxide-ketone", "peroxide", "ketone",
+     "과산화수소 같은 과산화물과 아세톤 같은 케톤이 만나면 충격에 민감한 폭발성 과산화물이 생길 수 있다",
+     KEEP_APART),
+    ("silver-ammonia", "silver", "ammonia",
+     "은 화합물(질산은 등)과 암모니아 용액을 섞어 두면 마른 뒤 폭발하는 은 화합물이 생길 수 있다",
+     KEEP_APART),
+    ("acid-base", "acid", "base", "산과 염기를 섞으면 큰 중화열이 나고 튈 수 있다",
      "보관은 분리하고, 중화 실험처럼 일부러 섞을 때는 묽힌 용액을 소량씩 저으며(필요하면 "
      "냉각하며) 천천히 더할 것"),
 ]
+# 같은 쌍에서 앞의(더 구체적인) 규칙이 이미 걸렸으면 뒤의 일반 규칙은 겹치는 말이라 뺀다
+_REDUNDANT = {
+    "oxidizer-organic": {"oxidizer-flammable", "oxidizing-acid-organic"},
+    "water-reactive-aqueous": {"water-reactive-acid"},
+}
+# 태그가 다른 태그를 함께 뜻하는 경우 (유기용매는 유기물, 알칼리 금속은 물 반응성·환원제)
+_IMPLIES = {
+    "organic-solvent": {"organic"},
+    "alkali-metal": {"water-reactive", "reducer"},
+    "oxidizing-acid": {"acid"},
+}
+
+# 섞지 않아도 그 물질 하나로 생기는 위험 — 안내문 '취급 주의'와 라벨 카드에 따로 표시한다
+SOLO_CAUTIONS = {
+    "peroxide-former": "공기·빛에 오래 두면 폭발성 과산화물이 생길 수 있음 — 용기에 개봉일을 적고, "
+                       "오래됐거나 뚜껑 주변에 결정이 보이면 열거나 농축하지 말고 안전관리자에게 알릴 것",
+    "water-reactive": "물·습기와 닿으면 인화성 기체가 생길 수 있음 — 물로 씻거나 물 소화기를 쓰지 말고, "
+                      "건조한 곳에서 다루며 금속 화재용(D급) 소화기나 마른 모래를 준비할 것",
+}
+
+# H코드에서 바로 알 수 있는 태그
+_H_CODE_TAGS = [
+    (re.compile(r"EUH019"), "peroxide-former"),
+    (re.compile(r"H26[01]|EUH014"), "water-reactive"),
+    (re.compile(r"H27[0-2]"), "oxidizer"),
+]
+# PubChem 'Reactive Group'(CAMEO Chemicals 반응성 분류) 이름 → 태그. 부분 문자열로 비교한다.
+_REACTIVE_GROUP_TAGS = [
+    ("acids, strong oxidizing", ["acid", "oxidizing-acid"]),
+    ("acids", ["acid"]),
+    ("salts, acidic", ["acid"]),
+    ("bases", ["base"]),
+    ("salts, basic", ["base"]),
+    ("amines", ["base", "organic"]),
+    ("ethers", ["peroxide-former", "organic"]),
+    ("peroxides", ["peroxide", "oxidizer"]),
+    ("oxidizing agents", ["oxidizer"]),
+    ("nitrate and nitrite compounds, inorganic", ["oxidizer"]),
+    ("reducing agents", ["reducer"]),
+    ("metals, alkali", ["alkali-metal", "water-reactive", "reducer"]),
+    ("water-reactive", ["water-reactive"]),
+    ("water and aqueous solutions", ["aqueous"]),
+    ("cyanides", ["cyanide"]),
+    ("halogenated organic", ["halogenated", "organic"]),
+    ("hydrocarbons", ["organic"]),
+    ("alcohols", ["organic"]),
+    ("ketones", ["organic", "ketone"]),
+    ("aldehydes", ["organic"]),
+    ("esters", ["organic"]),
+    ("nitriles", ["organic"]),
+    ("phenols", ["organic"]),
+    ("explosives", ["explosive"]),
+]
+
+
+def tags_from_hazard_statements(statements: list[str]) -> list[str]:
+    text = " ".join(statements or [])
+    return list(dict.fromkeys(tag for pattern, tag in _H_CODE_TAGS if pattern.search(text)))
+
+
+def tags_from_reactive_groups(groups: list[str]) -> list[str]:
+    tags: list[str] = []
+    for g in groups or []:
+        low = g.lower()
+        for key, mapped in _REACTIVE_GROUP_TAGS:
+            if key in low:
+                tags += mapped
+    return list(dict.fromkeys(tags))
+
+
+# ── 한국어 유해·위험 문구 ────────────────────────────────────────────
+_H_PREFIX = re.compile(r"^\s*((?:EUH|H)\d{3}[A-Za-z]{0,2}(?:\s*\+\s*(?:EUH|H)\d{3}[A-Za-z]{0,2})*)"
+                       r"\s*(?:\([^)]*\))?\s*[:：]?\s*(.*)$")
+
+
+def korean_hazard(statement: str) -> str:
+    """'H225 (100%): Highly Flammable liquid and vapor [Danger ...]' → 'H225 고인화성 액체 및 증기'.
+    'H302+H312+H332'처럼 묶인 코드는 각 문구를 ' · '로 잇는다. 표에 없는 코드가 하나라도
+    있으면 뜻을 지어내지 않고 원문을 그대로 돌려준다."""
+    m = _H_PREFIX.match(statement or "")
+    if not m:
+        return statement
+    codes = [c.strip() for c in m.group(1).split("+")]
+    texts = []
+    for code in codes:
+        base = re.match(r"(EUH|H)\d{3}", code).group(0)
+        if base not in H_STATEMENTS_KO:
+            return statement
+        texts.append(H_STATEMENTS_KO[base])
+    return f"{'+'.join(codes)} {' · '.join(texts)}"
+
 
 # ── 의도 인식 ────────────────────────────────────────────────────────
 _INGEST = re.compile(r"마시|마실|마셔|마셨|먹|삼키|삼켜|삼켰|음용|섭취|drink|swallow", re.I)
@@ -251,7 +369,10 @@ def hazard_types_for_guides(sds_list: list[dict], limit: int = 4) -> list[str]:
 
 
 def _traits(sds: dict) -> set[str]:
-    return set(sds.get("hazard_classes", [])) | set(sds.get("tags", []))
+    traits = set(sds.get("hazard_classes", [])) | set(sds.get("tags", []))
+    for tag in list(traits):
+        traits |= _IMPLIES.get(tag, set())
+    return traits
 
 
 def check_incompatibility(sds_list: list[dict]) -> list[dict]:
@@ -261,11 +382,26 @@ def check_incompatibility(sds_list: list[dict]) -> list[dict]:
     conflicts = []
     for a, b in combinations(usable, 2):
         ta, tb = _traits(a), _traits(b)
-        for x, y, warning, advice in INCOMPATIBILITY_RULES:
-            if (x in ta and y in tb) or (y in ta and x in tb):
-                conflicts.append({"pair": [display_name(a), display_name(b)],
-                                  "warning": warning, "advice": advice})
+        hit = [r for r in INCOMPATIBILITY_RULES
+               if (r[1] in ta and r[2] in tb) or (r[2] in ta and r[1] in tb)]
+        ids = {r[0] for r in hit}
+        for rule_id, _, _, warning, advice in hit:
+            if _REDUNDANT.get(rule_id, set()) & ids:
+                continue
+            conflicts.append({"rule": rule_id, "pair": [display_name(a), display_name(b)],
+                              "warning": warning, "advice": advice})
     return conflicts
+
+
+def solo_cautions(sds_list: list[dict]) -> list[dict]:
+    """섞지 않아도 주의할 성질 — 물질별로 [{name, tag, text}]."""
+    out = []
+    for s in sds_list:
+        traits = _traits(s)
+        for tag, text in SOLO_CAUTIONS.items():
+            if tag in traits:
+                out.append({"name": display_name(s), "tag": tag, "text": text})
+    return out
 
 
 def is_explosive(sds_list: list[dict]) -> bool:

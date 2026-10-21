@@ -47,23 +47,45 @@ PLAN_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: {"needs_analysis":
                   '"tasks": [{"agent": "research"|"analysis", "target": string(선택), '
                   '"target_en": string(선택)}]}')
 
+CHAT_SYSTEM = ("당신은 화학 실험실 안전 도우미다. 한국어로 한두 문장으로 간결하게 답하라. "
+               "대화 이력에서 사용자가 밝힌 이름이 있으면 정확히 기억해 답하라. "
+               "모르는 단어·약어·질문에는 추측하지 말고 '알 수 없다'고 말한 뒤 정식 이름이나 "
+               "CAS 번호로 다시 물어봐 달라고 하라. "
+               "화학물질 안전 정보는 추측해서 말하지 말고, 물질명을 알려주면 안내문을 "
+               "작성해 준다고 안내하라.")
+
+
+def chat_user(query: str, history: list[dict]) -> str:
+    rendered = "\n".join(f"{m['role']}: {m['content']}" for m in history[-10:])
+    return f"## 지금까지의 대화\n{rendered or '(없음)'}\n\n## 사용자의 새 메시지\n{query}"
+
+
+def write_user(query: str, collected: list[dict], feedback: str | None) -> str:
+    user = f"## 사용자 요청\n{query}\n\n## 수집된 사실\n{render_facts(collected)}"
+    if feedback:
+        user += f"\n\n## 이전 초안에 대한 검수 반려 사유 (반드시 반영)\n{feedback}"
+    return user
+
+
 WRITE_SYSTEM = (
     "당신은 화학 실험실 안전 담당자다. '수집된 사실'에 있는 정보만 사용해 한국어로 "
-    "사용 전 안전 안내문을 작성하라. 수집된 사실에 없는 수치(인화점, 노출기준 등)나 "
-    "유해 문구는 절대 지어내지 마라. 합성 경로·반응 조건·시약 비율·제조 절차는 어떤 경우에도 "
+    "사용 전 안전 안내문을 작성하라. 수집된 사실에 없는 수치(인화점, 노출기준, 농도 등)나 "
+    "H코드·유해 문구는 절대 지어내지 마라 — 단위가 붙은 수치(°C·%·ppm 등)와 H코드는 검수 코드가 "
+    "수집된 사실과 대조해 없으면 반려한다. 합성 경로·반응 조건·시약 비율·제조 절차는 어떤 경우에도 "
     "쓰지 마라. 반드시 아래 형식을 지켜라.\n"
     "(의도 경고가 있으면 맨 앞에 '⚠️ ' 로 시작하는 경고 문단)\n"
     "[사용 전 안전 안내] 물질명들\n"
     "1) 유해성 요약 — 물질별 신호어, 그림문자, 주요 유해·위험 문구\n"
     "2) 보호구 — 필요한 보호구\n"
-    "3) 취급 주의 — 물질별 취급 방법\n"
+    "3) 취급 주의 — 물질별 취급 방법('단독 주의'가 있으면 여기에 반드시 쓴다)\n"
     "4) 혼용 주의 — 혼촉 점검 결과(없으면 '확인된 혼촉 위험 없음')\n"
     "5) 응급조치 — 흡입·피부·눈·섭취\n"
     "6) 보관·폐기 — 보관 및 폐기 방법\n"
     "출처: 데이터 출처\n"
     "조회에 실패한 물질은 '정보를 확인하지 못함 — 공식 SDS 확인 필요'라고 쓰고 실패 이유를 덧붙여라.\n"
     "모든 물질이 조회에 실패했다면 1)~6) 형식을 쓰지 말고 '[확인 불가] 물질명'과 실패 이유, "
-    "정식 이름·CAS 번호를 다시 요청하는 문장, '공식 SDS' 확인 안내만 짧게 써라. 약어의 뜻을 추측하지 마라.\n"
+    "정식 이름·CAS 번호를 다시 요청하는 문장, '공식 SDS' 확인 안내만 짧게 써라. 약어의 뜻을 추측하지 마라. "
+    "단, 혼촉 점검(코드 판정)에 위험이 있으면 그 조합은 섞거나 함께 보관하지 말라고 반드시 쓴다.\n"
     "의도 경고 규칙: 섭취 의도면 '마시거나 먹으면 안 된다, 이미 삼켰다면 구토를 유도하지 말고 즉시 "
     "119에 연락, 스스로를 해치려는 생각이 든다면 자살예방상담전화 109(24시간)'를 반드시 쓴다. "
     "합성 의도면 '이 서비스는 합성 절차를 안내하지 않으며 아래는 물질 취급 안전 정보'라고 쓴다. "
@@ -99,6 +121,8 @@ def render_facts(collected: list[dict]) -> str:
         elif c["source"] == "sds":
             if not d.get("found"):
                 facts.append(f"- [SDS 조회 실패] {d.get('query')}: {d.get('reason')}")
+                for caution in chem_rules.solo_cautions([d]):
+                    facts.append(f"  단독 주의(코드 판정): {caution['text']}")
                 continue
             fa = "; ".join(f"{k}: {v}" for k, v in d.get("first_aid", {}).items())
             facts.append(
@@ -109,6 +133,8 @@ def render_facts(collected: list[dict]) -> str:
                 f"  성질 태그: {', '.join(d.get('tags', []))} / 인화점: {d.get('flash_point')}\n"
                 f"  응급조치: {fa}\n"
                 f"  취급: {d.get('handling')}\n  보관: {d.get('storage')}")
+            for caution in chem_rules.solo_cautions([d]):
+                facts.append(f"  단독 주의(코드 판정): {caution['text']}")
         elif c["source"] == "guide":
             facts.append(f"- [취급 지침]\n{d.strip()}")
         elif c["source"] == "analysis":

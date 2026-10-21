@@ -5,18 +5,22 @@ Ollama의 구조화 출력(format=<JSON Schema>)과 temperature=0으로 변동�
 결정론은 아니다 — 그래서 gate·replan·validate가 연출이 아니라 실제 방어선으로 동작한다.
 프롬프트와 계획 보정 코드는 openai_llm.py와 공유한다(agent/prompts.py).
 
+모든 호출은 httpx.AsyncClient로 한다 — 모델이 생각하는 동안 서버의 다른 요청(다른 사용자의
+질문, /health 등)이 멈추지 않는다. 동기 httpx.post를 쓰면 이벤트 루프 전체가 그동안 막힌다.
+
 비용(cost_usd)은 '가상 단가 × 실측 토큰 수'다 — 로컬 추론이라 실제 과금은 0이다.
 
 사전 조건: `ollama serve` 실행 중 + `ollama pull qwen3:0.6b qwen3:8b`.
 """
 import json
+import os
 
 import httpx
 from langsmith import traceable
 
 from . import prompts
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 
 ROUTE_SCHEMA = {
     "type": "object",
@@ -54,7 +58,7 @@ class OllamaLLM:
         self.model = model
         self.usd_per_1k = usd_per_1k_tokens
 
-    def _chat(self, system: str, user: str, schema: dict | None = None) -> tuple[str, dict]:
+    async def _chat(self, system: str, user: str, schema: dict | None = None) -> tuple[str, dict]:
         payload = {
             "model": self.model,
             "messages": [{"role": "system", "content": system},
@@ -64,7 +68,8 @@ class OllamaLLM:
         }
         if schema is not None:
             payload["format"] = schema
-        resp = httpx.post(OLLAMA_URL, json=payload, timeout=300.0)
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(OLLAMA_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()
         content = data["message"]["content"]
@@ -112,8 +117,8 @@ class OllamaFastLLM(OllamaLLM):
     """분류·계획·단순 대화 전담 (저사양 소형 모델)."""
 
     @traceable(run_type="llm", name="ollama_fast.route")
-    def route(self, query: str) -> tuple[dict, dict]:
-        content, usage = self._chat(prompts.ROUTE_SYSTEM, query, schema=ROUTE_SCHEMA)
+    async def route(self, query: str) -> tuple[dict, dict]:
+        content, usage = await self._chat(prompts.ROUTE_SYSTEM, query, schema=ROUTE_SCHEMA)
         try:
             raw = json.loads(content)
             route = raw.get("route") if raw.get("route") in ("chat", "safety") else None
@@ -125,9 +130,9 @@ class OllamaFastLLM(OllamaLLM):
         return result, usage
 
     @traceable(run_type="llm", name="ollama_fast.plan")
-    def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
+    async def plan(self, query: str, procedure_prompt: str) -> tuple[dict, dict]:
         user = f"## 표준 절차\n{procedure_prompt}\n\n## 사용자 요청\n{query}"
-        content, usage = self._chat(prompts.plan_system(), user, schema=PLAN_SCHEMA)
+        content, usage = await self._chat(prompts.plan_system(), user, schema=PLAN_SCHEMA)
         try:
             raw = json.loads(content)
         except json.JSONDecodeError:
@@ -136,16 +141,8 @@ class OllamaFastLLM(OllamaLLM):
 
     @traceable(run_type="llm", name="ollama_fast.chat")
     async def chat(self, query: str, history: list[dict], on_token=None) -> tuple[str, dict]:
-        system = ("당신은 화학 실험실 안전 도우미다. 한국어로 한두 문장으로 간결하게 답하라. "
-                  "대화 이력에서 사용자가 밝힌 이름이 있으면 정확히 기억해 답하라. "
-                  "모르는 단어·약어·질문에는 추측하지 말고 '알 수 없다'고 말한 뒤 정식 이름이나 "
-                  "CAS 번호로 다시 물어봐 달라고 하라. "
-                  "화학물질 안전 정보는 추측해서 말하지 말고, 물질명을 알려주면 안내문을 "
-                  "작성해 준다고 안내하라.")
-        rendered = "\n".join(f"{m['role']}: {m['content']}" for m in history[-10:])
-        user = (f"## 지금까지의 대화\n{rendered or '(없음)'}\n\n"
-                f"## 사용자의 새 메시지\n{query}")
-        return await self._chat_stream(system, user, on_token=on_token)
+        user = prompts.chat_user(query, history)
+        return await self._chat_stream(prompts.CHAT_SYSTEM, user, on_token=on_token)
 
 
 class OllamaQualityLLM(OllamaLLM):
@@ -154,8 +151,5 @@ class OllamaQualityLLM(OllamaLLM):
     @traceable(run_type="llm", name="ollama_quality.write")
     async def write(self, query: str, collected: list[dict], attempt: int,
                     feedback: str | None, on_token=None) -> tuple[str, dict]:
-        user = (f"## 사용자 요청\n{query}\n\n## 수집된 사실\n"
-                f"{prompts.render_facts(collected)}")
-        if feedback:
-            user += f"\n\n## 이전 초안에 대한 검수 반려 사유 (반드시 반영)\n{feedback}"
+        user = prompts.write_user(query, collected, feedback)
         return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)

@@ -248,7 +248,7 @@
 
         <!-- 확인 불가 -->
         <section v-else-if="t.finished && t.notice.kind === 'unknown'" class="label unknown" aria-label="확인 불가">
-          <div v-for="w in warnings(t.notice)" :key="w.kind" class="alert" :class="w.kind">
+          <div v-for="w in warnings(t.notice)" :key="w.title" class="alert" :class="w.kind">
             <div><strong>{{ w.title }}</strong>{{ w.body }}</div>
             <div class="calls" v-if="w.kind === 'danger'">
               <a class="call" href="tel:119">119 신고</a>
@@ -270,12 +270,22 @@
               </div>
             </div>
           </div>
+          <div class="sub" v-if="t.notice.conflicts.length">
+            <h4>이름만으로도 알 수 있는 위험</h4>
+            <div class="pairs">
+              <div class="pair" v-for="p in pairs(t.notice).filter(x => x.kind === 'bad')" :key="p.key" :class="p.kind">
+                <span class="mark">{{ p.mark }}</span>
+                <b>{{ p.names }}</b>
+                <div><p v-for="line in p.lines" :key="line">{{ line }}</p></div>
+              </div>
+            </div>
+          </div>
           <div class="foot">확인되지 않은 물질의 유해성은 추측해서 안내하지 않습니다. 사용 전에 공식 SDS를 확인하세요.</div>
         </section>
 
         <!-- 안전 라벨 -->
         <section v-else-if="t.finished && t.notice" class="label" aria-label="사용 전 안전 라벨">
-          <div v-for="w in warnings(t.notice)" :key="w.kind" class="alert" :class="w.kind">
+          <div v-for="w in warnings(t.notice)" :key="w.title" class="alert" :class="w.kind">
             <div><strong>{{ w.title }}</strong>{{ w.body }}</div>
             <div class="calls" v-if="w.kind === 'danger'">
               <a class="call" href="tel:119">119 신고</a>
@@ -520,6 +530,7 @@ const app = createApp({
       if (n.intent?.synthesis) out.push({ kind: 'caution', title: '합성 절차는 안내하지 않습니다',
         body: '아래는 해당 물질을 다룰 때의 안전 정보입니다. 합성은 지도교수·안전관리자의 승인과 검증된 절차서에 따라 진행하세요.'
           + (n.substances.some(s => (s.pictograms || []).some(p => p.code === 'GHS01')) ? ' 폭발성 물질은 허가 없이 제조할 수 없습니다.' : '') });
+      (n.cautions || []).forEach(c => out.push({ kind: 'caution', title: `${c.name} — 섞지 않아도 주의`, body: c.text + '.' }));
       return out;
     }
     function pairs(n) {
@@ -541,7 +552,8 @@ const app = createApp({
     function sources(n) {
       const out = [];
       n.substances.filter(s => s.found).forEach(s => {
-        if (s.source_url) out.push({ text: `PubChem (${s.name})`, href: s.source_url });
+        if (s.source === 'kosha') out.push({ text: `안전보건공단 MSDS (${s.name})`, href: s.source_url });
+        else if (s.source_url) out.push({ text: `PubChem (${s.name})`, href: s.source_url });
         else if (s.source === 'sample') out.push({ text: `샘플 데이터 (${s.name})` });
       });
       return out.length ? out : [{ text: '조회된 자료 없음' }];

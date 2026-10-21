@@ -27,7 +27,20 @@ API 키도, AI 모델 설치도 필요 없는 **fake 모드**로 채팅 화면�
   - 터미널 ② : 프론트(채팅 화면, 8600번 포트)
 - 새 터미널 창은 터미널에서 `Cmd + N`으로 연다.
 
-### 2단계. 프로젝트 폴더로 이동
+### 2단계. 프로젝트 받고 폴더로 이동
+
+**A, B 중 받은 방법에 맞는 것 하나만** 따라 한다.
+
+**A. 깃허브에서 받기 (git clone)**
+
+```bash
+cd ~/Downloads
+git clone https://github.com/Seungmin-Choi37/skala-ai-mini-project.git
+cd skala-ai-mini-project
+```
+`git: command not found`가 나오면 git이 없는 것이다. macOS는 안내 창이 뜨면 "설치"를 누르고, 끝나면 다시 실행한다.
+
+**B. zip 파일로 받기**
 
 zip을 `다운로드` 폴더에 받았다면:
 
@@ -37,8 +50,14 @@ unzip chem_safety_agent.zip
 cd chem_safety_agent
 ```
 
-이후 모든 명령은 **이 `chem_safety_agent` 폴더 안에서** 실행해야 한다.
-현재 위치는 `pwd`로 확인할 수 있다(끝이 `/chem_safety_agent`이면 맞다).
+이후 모든 명령은 **이 프로젝트 폴더 안에서** 실행해야 한다.
+현재 위치는 `pwd`로 확인할 수 있다(끝이 위에서 `cd`한 폴더 이름이면 맞다).
+
+> 💡 **폴더 이름에 띄어쓰기가 있으면** (예: `chem_safety_agent 2`) 따옴표로 감싼다.
+> `cd "chem_safety_agent 2"` — 따옴표가 없으면 `no such file or directory`가 난다.
+>
+> 💡 **VS Code를 쓰면 더 쉽다.** VS Code에서 `파일 → 폴더 열기`로 프로젝트 폴더를 연 뒤
+> `터미널 → 새 터미널`을 열면, 터미널이 이미 프로젝트 폴더에 있어서 `cd`가 필요 없다.
 
 ### 3단계. 설치 (처음 한 번만)
 
@@ -65,6 +84,16 @@ grep CHEM_DATA_MODE .env
 **`CHEM_DATA_MODE=live`** 가 나오면 된다. `sample`이 나오면(예전에 만든 `.env`) 파일을 열어
 `live`로 고친다. `live`는 PubChem(무료, 키 불필요)에서 물질 정보를 실시간으로 가져오는 모드다.
 
+마지막으로 잘 설치됐는지 자동 테스트로 확인한다(인터넷·API 키 불필요, 15초쯤 걸린다).
+
+```bash
+bash sh/run_tests.sh
+```
+마지막 줄에 **`72 passed`**(숫자는 달라질 수 있다)처럼 `passed`만 나오면 성공이다.
+`failed`나 `error`가 나오면 `bash sh/setup_venv.sh`를 다시 실행한 뒤 한 번 더 해 본다.
+
+> 💡 `sh/...` 파일 앞에는 항상 `bash`를 붙여 실행한다. 그러면 `chmod +x`(실행 권한 주기)를 할 필요가 없다.
+
 ### 4단계. 백엔드(에이전트) 켜기 — 터미널 ①
 
 ```bash
@@ -89,11 +118,12 @@ bash sh/run_agent_fake.sh
 
 ### 5단계. 프론트(채팅 화면) 켜기 — 터미널 ②
 
-`Cmd + N`으로 **새 터미널**을 열고, 다시 프로젝트 폴더로 이동한다.
+`Cmd + N`으로 **새 터미널**을 열고, 다시 프로젝트 폴더로 이동한다(2단계에서 `cd`한 폴더와 같은 곳).
 
 ```bash
 cd ~/Downloads/chem_safety_agent
 ```
+VS Code라면 터미널 패널 오른쪽 위의 **`+`** 버튼으로 새 터미널을 열면 되고, `cd`는 필요 없다.
 
 그다음 **A, B 중 하나**로 켠다. 결과는 같다. 처음이라면 **A를 권장**한다.
 
@@ -183,14 +213,52 @@ python web_demo_server.py
 
 터미널 ②와 터미널 ①에서 각각 `Ctrl + C`를 누른다. (B 방법을 썼다면 `deactivate`로 가상환경도 끌 수 있다)
 
+### (선택) 실제 AI(OpenAI)로 켜기
+
+fake 모드는 정해진 규칙으로만 답한다. 실제 AI가 안내문을 쓰게 하려면 4단계만 바꾸면 된다.
+⚠️ **질문할 때마다 OpenAI 계정에 요금이 청구된다.**
+
+1. OpenAI 키를 준비한다. https://platform.openai.com → 로그인 → API keys → `Create new secret key`.
+   `sk-`로 시작하는 키가 나오면 복사한다(이 창을 닫으면 다시 볼 수 없다).
+2. `.env` 파일을 연다.
+```bash
+   open -e .env
+```
+   (macOS 텍스트 편집기로 열린다. VS Code를 쓰면 왼쪽 파일 목록에서 `.env`를 클릭해도 된다.
+   Windows는 `notepad .env`)
+3. `OPENAI_API_KEY=` 바로 뒤에 띄어쓰기 없이 키를 붙여 넣고 저장한다(`Cmd + S`).
+```ini
+   CHEM_DATA_MODE=live
+   OPENAI_API_KEY=sk-여기에-본인-키
+```
+   **이 키는 절대 화면 캡처·채팅·깃허브에 올리지 않는다.** `.env`는 `.gitignore`에 들어 있어 깃에 올라가지 않는다.
+   키가 노출됐다면 OpenAI 사이트에서 바로 삭제하고 새로 만든다.
+4. 터미널 ①에서 fake 백엔드가 켜져 있다면 `Ctrl + C`로 끄고, 대신 이걸 실행한다.
+```bash
+   bash sh/run_agent_openai.sh
+```
+5. `계속하시겠습니까? [y/N]`가 나오면 `y`를 입력하고 Enter.
+6. 터미널 ②(프론트)는 그대로 두고 브라우저를 새로고침(`Cmd + R`)한다.
+   오른쪽 위가 **`openai · 데이터 live`** 로 바뀌었으면 성공이다.
+   안내문이 글자 단위로 흘러나오고, "안내문 전문"이 펼쳐진 채로 보인다.
+
+| 나오는 메시지 | 해결 |
+|---|---|
+| `ERROR: .env가 없습니다` | 3단계의 `printf ...` 명령으로 `.env`를 만든다 |
+| `ERROR: OPENAI_API_KEY가 비어있거나…` | 위 2~3번 — 키를 넣고 저장했는지 확인 |
+| 답 대신 `401` 오류 | 키가 틀렸거나 삭제된 키다. 새로 만들어 다시 넣는다 |
+| 답 대신 `429` 오류 | 결제 수단이 없거나 사용 한도 초과. OpenAI 사이트의 Billing 확인 |
+
+다시 fake 모드로 돌아가려면 터미널 ①에서 `Ctrl + C` 후 `bash sh/run_agent_fake.sh`.
+
 ### 다음에 다시 켤 때
 
-3단계(설치)는 건너뛴다.
+3단계(설치)는 건너뛴다. 폴더 이름은 2단계에서 받은 이름으로 바꾼다(VS Code 터미널이면 `cd` 생략).
 
 ```bash
 # 터미널 ①
 cd ~/Downloads/chem_safety_agent
-bash sh/run_agent_fake.sh
+bash sh/run_agent_fake.sh          # 실제 AI로 켜려면 bash sh/run_agent_openai.sh
 
 # 터미널 ② (새 창)
 cd ~/Downloads/chem_safety_agent
@@ -198,11 +266,15 @@ bash sh/run_frontend.sh
 # → 브라우저 http://localhost:8600
 ```
 
+코드를 받거나 고친 뒤 `requirements.txt`가 바뀌었다면 `bash sh/setup_venv.sh`를 한 번 더 실행한다.
+
 ### 자주 막히는 곳
 
 | 증상 | 원인과 해결 |
 |---|---|
 | `No such file or directory: sh/...` 또는 `can't open file` | 프로젝트 폴더 밖에 있다. `cd ~/Downloads/chem_safety_agent` 후 다시 실행 |
+| `cd: no such file or directory` (폴더 이름에 띄어쓰기) | 따옴표로 감싼다: `cd "chem_safety_agent 2"` |
+| VS Code에서 `import pytest` 등에 노란 밑줄 | ① `bash sh/setup_venv.sh` 실행 ② `Cmd + Shift + P` → `Python: Select Interpreter` → 경로에 `.venv`가 있는 것 선택 |
 | `python3: command not found` | Python 미설치. python.org에서 설치 후 터미널을 새로 연다 |
 | `ModuleNotFoundError` | 설치가 안 됐거나(→ `bash sh/setup_venv.sh`), B 방법에서 가상환경을 안 켰다(→ `source .venv/bin/activate`) |
 | `address already in use` | 이전에 켠 서버가 남아 있다. `lsof -ti:8100 \| xargs kill -9` 와 `lsof -ti:8600 \| xargs kill -9` 후 다시 실행 |

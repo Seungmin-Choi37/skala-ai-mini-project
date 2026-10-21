@@ -24,15 +24,15 @@ QUALITY_MODEL="${OPENAI_QUALITY_MODEL:-gpt-4o}"
 
 # ── 0) 환경 변수 ───────────────────────────────────────────────────────
 if [ ! -f .env ]; then
-    echo "ERROR: .env가 없습니다 — .env.example을 복사해 .env로 만들고 본인 API 키를 채워주세요."
-    echo "  cp .env.example .env"
+    echo "ERROR: .env가 없습니다 — 아래 명령으로 만든 뒤 다시 실행하세요."
+    echo '  printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env'
     exit 1
 fi
 set -a; source .env; set +a
 export LANGCHAIN_PROJECT="chem-safety-agent-openai"   # fake/ollama 모드와 프로젝트 분리
 
 if [ -z "${OPENAI_API_KEY:-}" ] || [ "$OPENAI_API_KEY" = "sk-..." ]; then
-    echo "ERROR: OPENAI_API_KEY가 비어있거나 플레이스홀더입니다 — .env에 본인 키를 채우세요 (.env.example 참고)."
+    echo "ERROR: OPENAI_API_KEY가 비어있거나 플레이스홀더입니다 — .env의 OPENAI_API_KEY= 뒤에 본인 키를 넣으세요."
     exit 1
 fi
 

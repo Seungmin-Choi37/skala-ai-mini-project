@@ -222,7 +222,7 @@ python --version
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
+Set-Content .env "CHEM_DATA_MODE=live`nOPENAI_API_KEY="
 ```
 
 `Activate.ps1` 실행이 막히면 먼저 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`를 실행하고 `Y`.

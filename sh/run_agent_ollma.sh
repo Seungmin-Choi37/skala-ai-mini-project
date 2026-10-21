@@ -21,8 +21,8 @@ QUALITY_MODEL="${OLLAMA_QUALITY_MODEL:-qwen3:8b}"
 
 # ── 0) LangSmith 환경 ──────────────────────────────────────────────────
 if [ ! -f .env ]; then
-    echo "ERROR: .env가 없습니다 — .env.example을 복사해 .env로 만들고 본인 API 키를 채워주세요."
-    echo "  cp .env.example .env"
+    echo "ERROR: .env가 없습니다 — 아래 명령으로 만든 뒤 다시 실행하세요."
+    echo '  printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env'
     exit 1
 fi
 set -a; source .env; set +a

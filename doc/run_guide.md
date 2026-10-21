@@ -27,7 +27,7 @@ bash sh/setup_venv.sh
 ## 3. 환경설정 파일
 
 ```bash
-cp .env.example .env
+printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env
 ```
 
 필요한 값만 채운다 (fake 모드는 그대로 둬도 된다).
@@ -171,7 +171,7 @@ python3 web_demo_server.py                                     # 터미널 2
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
+Set-Content .env "CHEM_DATA_MODE=live`nOPENAI_API_KEY="
 
 # 터미널 1
 $env:LLM_BACKEND="fake"; $env:CHEM_DATA_MODE="sample"; python server.py
@@ -207,6 +207,6 @@ LLM_BACKEND=fake python3 server.py     # 이름 알려주고 Ctrl+C → 다시 �
 | `address already in use` (8100/8600) | `lsof -ti:8100 \| xargs kill -9` (Windows: `netstat -ano \| findstr 8100` → `taskkill /PID 번호 /F`) |
 | 채팅 화면 제목에 `{{ backendLabel }}`가 그대로 보임 | Vue를 unpkg.com에서 못 받은 것 — 인터넷/사내 방화벽 확인 |
 | 화면은 뜨는데 답이 안 옴 | 백엔드(8100)가 꺼져 있음 — 터미널 1 확인 |
-| `.env가 없습니다` | `cp .env.example .env` (ollama/openai 스크립트는 `.env` 필수) |
+| `.env가 없습니다` | `printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env` 로 만든다 (ollama/openai 스크립트는 `.env` 필수) |
 | 이전 대화가 섞임 | `thread_id`를 바꾸거나 `session.db` 삭제 |
 | 다른 사람에게 배포 | `bash sh/make_student_zip.sh` → `.env`(키)를 뺀 zip이 상위 폴더에 생성 |

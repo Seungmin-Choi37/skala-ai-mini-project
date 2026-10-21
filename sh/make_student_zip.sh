@@ -2,8 +2,8 @@
 #
 # chem_safety_agent — 학생 배포용 zip을 만드는 스크립트.
 #
-# .env(실제 API 키가 들어있는 파일)는 절대 포함하지 않고, 대신 .env.example을
-# 담아서 학생이 직접 `cp .env.example .env` 후 본인 키를 채우게 한다. 그 외
+# .env(실제 API 키가 들어있는 파일)는 절대 포함하지 않는다 — 받는 사람은 README 3단계대로
+# .env를 직접 만들고 본인 키를 채운다. 그 외
 # .venv/__pycache__/session.db/*.log 등 로컬 실행 중 생기는 산출물도 제외한다.
 #
 # 실행:

@@ -49,11 +49,12 @@ python3 --version
 
 ```bash
 bash sh/setup_venv.sh
-cp .env.example .env
+printf "CHEM_DATA_MODE=live\nOPENAI_API_KEY=\n" > .env
 ```
 - 첫 줄: 이 프로젝트 전용 Python 환경(`.venv` 폴더)을 만들고 필요한 라이브러리를 설치한다.
   1~3분 걸리고, 마지막에 **`필요 패키지 전부 import 성공`**이 나오면 성공이다.
 - 둘째 줄: 설정 파일 `.env`를 만든다. fake 모드는 내용을 고칠 필요가 없다.
+  OpenAI를 쓸 때만 `.env`를 열어 `OPENAI_API_KEY=` 뒤에 본인 키를 넣는다.
 
 설정이 맞는지 확인한다.
 

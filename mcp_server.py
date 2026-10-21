@@ -9,7 +9,9 @@ FastAPI 백엔드(server.py)가 lifespan에서 이 파일을 subprocess(stdio)�
                                      ② PubChem(이름 사전으로 한국어명→CAS 변환)
                                      ③ 둘 다 실패하면 샘플이 있을 때 샘플로 폴백
 - Tool     get_kosha_msds       : 안전보건공단 MSDS Open API 단독 조회 (확인·디버깅용)
+- Tool     search_knowledge     : RAG — 화학 안전 지식 문서를 벡터 DB(agent/vector_store.py)에서 의미 검색
 - Resource safety-guide://hazard/{hazard_type} : 유해성 유형별 취급 지침(정적 문서)
+- Resource knowledge://doc/{name} : 일반 화학·실험실 안전 지식 문서 원문(data/knowledge)
 - Prompt   safety_notice_prompt : 사용 전 안전 안내문 작성 표준 절차
 """
 import os
@@ -141,6 +143,40 @@ def get_kosha_msds(name: str) -> dict:
     except Exception as exc:
         return {"query": name, "found": False, "available": True,
                 "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
+_VECTOR_STORE = None
+
+
+@mcp.tool()
+def search_knowledge(query: str, k: int = 3) -> dict:
+    """RAG 검색 — 질문과 의미가 가까운 화학 안전 지식 문서를 벡터 DB에서 찾습니다.
+
+    query : 사용자 질문 그대로
+    k     : 돌려줄 최대 문서 수 (관련도가 낮은 문서는 k보다 적어도 빼고 돌려준다)
+    반환  : {"embedder": 임베딩 종류, "results": [{"doc", "title", "text", "matched", "score"}]}
+    """
+    global _VECTOR_STORE
+    from agent.vector_store import LocalEmbedder, VectorStore
+    try:
+        if _VECTOR_STORE is None:
+            _VECTOR_STORE = VectorStore()
+        results = _VECTOR_STORE.search(query, k=max(1, min(int(k), 5)))
+    except Exception as exc:   # OpenAI 임베딩 실패 시 로컬 임베딩으로 대체 (검색이 멈추지 않게)
+        _VECTOR_STORE = VectorStore(embedder=LocalEmbedder())
+        results = _VECTOR_STORE.search(query, k=max(1, min(int(k), 5)))
+        return {"embedder": _VECTOR_STORE.embedder.name, "results": results,
+                "note": f"기본 임베딩 실패({type(exc).__name__}) — 로컬 임베딩으로 검색"}
+    return {"embedder": _VECTOR_STORE.embedder.name, "results": results}
+
+
+@mcp.resource("knowledge://doc/{name}")
+def get_knowledge_doc(name: str) -> str:
+    """일반 화학·실험실 안전 지식 문서 원문 (RAG 검색 대상과 같은 파일)."""
+    path = ROOT / "data" / "knowledge" / f"{Path(name).stem}.md"
+    if not path.exists():
+        return f"문서 '{name}'이(가) 없습니다."
+    return path.read_text(encoding="utf-8")
 
 
 @mcp.resource("safety-guide://hazard/{hazard_type}")

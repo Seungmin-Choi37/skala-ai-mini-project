@@ -194,10 +194,11 @@ class OllamaQualityLLM(OllamaLLM):
         return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)
 
     @traceable(run_type="llm", name="ollama_quality.answer")
-    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
+    async def answer(self, query: str, history: list[dict], feedback: str | None,
+                     docs: list[dict] | None = None) -> tuple[dict, dict]:
         """일반 화학 질문 — 설명과 언급한 물질(CAS)을 JSON으로 받는다."""
         content, usage = await self._chat(prompts.KNOWLEDGE_SYSTEM,
-                                          prompts.knowledge_user(query, history, feedback),
+                                          prompts.knowledge_user(query, history, feedback, docs),
                                           schema=KNOWLEDGE_SCHEMA)
         try:
             raw = json.loads(content)

@@ -158,11 +158,21 @@ def test_decide_route():
 
 
 # ── 일반 화학 질문(knowledge) ──────────────────────────────────────
-def test_knowledge_fake_says_unknown(run_graph):
+def test_knowledge_rag_fake_answers_from_retrieved_doc(run_graph):
     s = run_graph("공기 중에 수증기를 흡수하는 물질은?")
     assert s["route"] == "knowledge"
+    retrieved = events_of(s, "KnowledgeRetrieved")[0]
+    assert retrieved["titles"][0].startswith("흡습성과 조해성") and retrieved["embedder"] == "local-ngram-512"
+    assert s["final"].startswith("[일반 화학 지식]") and "참고 문서 「흡습성과 조해성" in s["final"]
+    assert s["notice"]["docs"][0]["doc"] == "knowledge/hygroscopic.md"
+    assert [e["type"] for e in s["events"]][-4:] == ["KnowledgeRetrieved", "KnowledgeAnswered",
+                                                     "KnowledgeReviewed", "Finalize"]
+
+
+def test_knowledge_without_docs_says_unknown(run_graph):
+    s = run_graph("고분자 결정화 속도론을 설명해 줘")       # 화학 질문이지만 지식 문서에 없음
+    assert s["route"] == "knowledge" and events_of(s, "KnowledgeRetrieved")[0]["count"] == 0
     assert s["final"].startswith("알 수 없습니다") and s.get("notice") is None
-    assert [e["type"] for e in s["events"]][-3:] == ["KnowledgeAnswered", "KnowledgeReviewed", "Finalize"]
 
 
 class _KnowingLLM(QualityLLM):
@@ -173,7 +183,7 @@ class _KnowingLLM(QualityLLM):
         self.calls = []
         self.keep_number = keep_number
 
-    async def answer(self, query, history, feedback):
+    async def answer(self, query, history, feedback, docs=None):
         self.calls.append(feedback)
         text = "흡습성 물질은 공기 중의 수분을 끌어당깁니다. 수산화나트륨·염화칼슘이 대표적입니다."
         if not self.calls[1:] or self.keep_number:

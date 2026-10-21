@@ -44,6 +44,9 @@ DATA_GO_KR_API_KEY=          # 공공데이터포털 키 — 넣으면 안전보
 KOSHA_ENABLED=1              # 0으로 두면 키가 있어도 KOSHA를 쓰지 않는다
 CHEM_CACHE_TTL_DAYS=30       # 조회 결과 캐시 보관 일수 (0이면 캐시 끔)
 LANGCHAIN_TRACING_V2=false   # LangSmith를 쓸 때만 true + LANGCHAIN_API_KEY
+LANGCHAIN_API_KEY=           # LangSmith 키 (smith.langchain.com → Settings → API Keys)
+EMBEDDING_BACKEND=           # RAG 임베딩: openai | local (비우면 OpenAI 모드일 때 openai)
+JUDGE_MODEL=gpt-4o-mini      # LLM-as-a-Judge 채점 모델
 ```
 
 `.env`에는 실제 키가 들어가므로 깃에 올리거나 화면 캡처로 공유하지 않는다(`.gitignore`에 포함됨).
@@ -103,7 +106,7 @@ curl -s -X POST localhost:8100/chat -H 'Content-Type: application/json' \
 
 | 필드 | 의미 |
 |---|---|
-| `route` | `safety`(안내문 파이프라인) 또는 `chat`(일반 대화) |
+| `route` | `safety`(물질 안내) · `category`(성질로 찾기) · `knowledge`(일반 화학 질문, RAG) · `chat`(일반 대화) |
 | `gate_removed` | 혼촉 점검을 제거한 횟수 (물질 1종이면 1) |
 | `replan_rounds` | 취급 지침을 추가로 조사한 횟수 |
 | `validation_attempts` | 검수 시도 횟수 (fake는 일부러 1차를 반려하므로 2) |
@@ -137,9 +140,8 @@ curl -s https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/toluene/cids/JSO
 
 ## 6. 안전보건공단(KOSHA) MSDS 켜기
 
-> ⚠️ `agent/kosha.py`는 공개된 명세(아래 표)를 보고 만들었고, 개발 환경에서 외부 접속이 막혀
-> **실제 서버로는 시험해 보지 못했다.** 처음 켤 때 아래 6-3 확인을 꼭 한 번 한다.
-> 실패해도 PubChem으로 자동으로 넘어가므로 서비스가 멈추지는 않는다.
+> ✅ 실제 KOSHA 서버로 연결을 확인했다(톨루엔: 신호어 위험, H225·H304·H315, 응급조치 눈·피부·흡입·섭취).
+> 본인 키로 처음 켤 때 아래 6-3 확인을 한 번 한다. 실패해도 PubChem으로 자동으로 넘어가므로 서비스가 멈추지는 않는다.
 
 ### 6-1. 키 받기
 
@@ -256,7 +258,9 @@ bash sh/run_tests.sh
 | `tests/test_validate.py` | 검수 기준 — 형식·필수 문구, 지어낸 수치·H코드 반려 |
 | `tests/test_lookup.py` | PubChem 파서·SQLite 캐시, KOSHA 파서(가짜 응답), 조회 순서 KOSHA → PubChem → 샘플, 오류 메시지에 키가 안 찍히는지 |
 | `tests/test_llm_async.py` | OpenAI 스트리밍·JSON 모드, Ollama 비동기 호출 (가짜 HTTP 응답) |
-| `tests/test_graph.py` | 그래프 전체 흐름 — test_queries.md의 대표 질문들 |
+| `tests/test_graph.py` | 그래프 전체 흐름 — 네 갈래 경로(chat·category·knowledge·safety)와 반려 루프, test_queries.md의 대표 질문들 |
+| `tests/test_vector_store.py` | RAG 벡터 DB — 문서 색인·의미 검색·관련 없는 질문 거르기·문서 변경 시 재색인·MCP Tool |
+| `tests/test_judge.py` | LLM-as-a-Judge — 채점 기준, OpenAI Judge 요청 형식, evaluate.py 전체 흐름과 보고서 |
 | `tests/test_server.py` | FastAPI + 진짜 MCP 서버(subprocess) 연결, `/chat`, `/chat/stream` |
 
 파일 하나만 돌리기: `.venv/bin/python3 -m pytest tests/test_chem_rules.py -q`
@@ -325,3 +329,37 @@ LLM_BACKEND=fake python3 server.py     # 이름 알려주고 Ctrl+C → 다시 �
 | `.env가 없습니다` | 3번의 명령으로 만든다 (ollama/openai 스크립트는 `.env` 필수) |
 | 이전 대화가 섞임 | `thread_id`를 바꾸거나 `session.db` 삭제 |
 | 다른 사람에게 배포 | `bash sh/make_student_zip.sh` → `.env`(키)를 뺀 zip이 상위 폴더에 생성 |
+| 일반 화학 질문에 근거 문서가 안 붙음 | 로컬 임베딩은 표현이 많이 다르면 놓친다 — OpenAI 모드(`EMBEDDING_BACKEND=openai`)로 확인. 문서를 고쳤으면 자동 재색인된다 |
+| 평가 결과가 fake로만 나옴 | `bash sh/run_eval.sh`(인자 없이)는 OpenAI 키가 있어야 LLM Judge를 쓴다 |
+
+## 12. RAG · LLM-as-a-Judge · LangSmith
+
+### 12-1. RAG 벡터 DB
+
+- 문서: `data/knowledge/*.md`(12개) + `data/safety_guides/*.md`(10개). 문서를 추가·수정하면 다음 검색 때 자동으로 다시 색인한다.
+- 저장: `vector_store.db`(SQLite). 지우면 처음 검색할 때 다시 만든다.
+- 검색만 따로 해 보기:
+
+```bash
+.venv/bin/python3 -c "
+import mcp_server
+for d in mcp_server.search_knowledge('공기 중에 수증기를 흡수하는 물질은?')['results']:
+    print(d['score'], d['title'])
+"
+```
+
+### 12-2. LLM-as-a-Judge 평가
+
+```bash
+bash sh/run_eval.sh fake     # 무료 — fake LLM + 규칙 Judge, 흐름 확인
+bash sh/run_eval.sh          # 과금 — OpenAI 에이전트 + gpt-4o-mini Judge
+```
+결과는 `doc/eval_report.md`(표)와 `doc/eval_results.json`(답 원문 포함)에 저장된다. 질문은 `data/eval_cases.json`에서 고친다.
+
+### 12-3. LangSmith 화면 보기
+
+1. `.env`에 `LANGCHAIN_TRACING_V2=true`, `LANGCHAIN_API_KEY=lsv2_...`를 넣는다.
+2. `bash sh/run_agent_openai.sh`로 질문 몇 개를 보내거나 `bash sh/run_eval.sh`를 실행한다.
+3. https://smith.langchain.com → Projects → `chem-safety-agent-openai`(대화) 또는 `chem-safety-eval`(평가).
+   요청마다 `chat_request` → 노드(route·knowledge_retrieve·plan·research…) → LLM·MCP 호출이 트리로 보이고,
+   평가 프로젝트에는 Judge 점수가 Feedback 열에 붙는다.

@@ -293,12 +293,18 @@
             </div>
           </div>
           <div class="label-head">
-            <h3><small>일반 화학 지식 · SDS로 확인한 내용 아님</small>AI 답변</h3>
+            <h3><small>일반 화학 지식 · SDS로 확인한 내용 아님</small>{{ t.notice.docs && t.notice.docs.length ? '문서 근거 답변' : 'AI 답변' }}</h3>
             <div class="tools">
               <button class="btn" type="button" @click="copy(t)">{{ t.copied ? '복사됨' : '복사' }}</button>
             </div>
           </div>
           <div class="sub"><p class="answer">{{ t.notice.answer }}</p></div>
+          <div class="sub" v-if="t.notice.docs && t.notice.docs.length">
+            <h4>근거 문서 — 벡터 DB 검색(RAG)</h4>
+            <ul class="ppe">
+              <li v-for="d in t.notice.docs" :key="d.doc"><b>{{ d.title.split(' — ')[0] }}</b> 유사도 {{ d.score.toFixed(2) }}</li>
+            </ul>
+          </div>
           <div class="alert caution" v-if="t.notice.unverified.length">
             <div><strong>확인하지 않은 값</strong>답에 SDS로 확인하지 않은 값({{ t.notice.unverified.join(', ') }})이 있습니다. 사용 전 공식 SDS로 확인하세요.</div>
           </div>
@@ -312,7 +318,7 @@
               </button>
             </div>
           </div>
-          <div class="foot">설명은 AI의 일반 화학 지식이고, 물질 목록만 SDS 자료로 확인했습니다. 물질을 누르면 그 물질의 사용 전 안전 라벨을 만듭니다.<br />실제 사용 전에는 공식 SDS(KOSHA MSDS·제조사 SDS)를 확인하세요.</div>
+          <div class="foot">설명은 근거 문서와 AI의 일반 화학 지식이고, 물질 목록만 SDS 자료로 확인했습니다. 물질을 누르면 그 물질의 사용 전 안전 라벨을 만듭니다.<br />실제 사용 전에는 공식 SDS(KOSHA MSDS·제조사 SDS)를 확인하세요.</div>
         </section>
 
         <!-- 확인 불가 -->
@@ -506,7 +512,7 @@ const app = createApp({
     function stepOf(e) {
       switch (e.type) {
         case 'RouteDecided': return 0;
-        case 'PlanCreated': case 'CategoryPlanned': case 'KnowledgeAnswered': return 1;
+        case 'PlanCreated': case 'CategoryPlanned': case 'KnowledgeRetrieved': case 'KnowledgeAnswered': return 1;
         case 'KnowledgeReviewed': return e.retry ? 1 : 2;
         case 'GateApplied': return 2;
         case 'TaskCompleted': return e.source === 'sds' ? 3 : 4;
@@ -528,6 +534,7 @@ const app = createApp({
         case 'CategoryPlanned':
           return `${e.property} 후보 ${e.candidates}종 (AI 제안 ${e.from_llm}종${e.seeds_added ? ' + 기본 후보 ' + e.seeds_added + '종' : ''})`;
         case 'CategoryChecked': return `SDS 자료로 확인 ${e.confirmed}종 · 확인 못 함 ${e.unconfirmed}종`;
+        case 'KnowledgeRetrieved': return e.count ? `벡터 DB 검색 — 근거 문서 ${e.count}건: ${e.titles.map(x => x.split(' — ')[0]).join(', ')}` : '벡터 DB 검색 — 관련 문서 없음';
         case 'KnowledgeAnswered': return `AI 답변 작성 (${e.attempt}번째) · 언급한 물질 ${e.substances}종`;
         case 'KnowledgeReviewed': return e.ok ? '답변 점검 통과' : (e.retry ? '답변 점검 반려 → 다시 작성: ' : '답변 점검: 확인 안 된 값 경고 표시 — ') + (e.problems || []).join(' / ');
         case 'KnowledgeChecked': return `언급한 물질 SDS 확인 ${e.confirmed}종 · 확인 못 함 ${e.unconfirmed}종`;

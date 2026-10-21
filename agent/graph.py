@@ -4,8 +4,10 @@ route(LLM 분류 + 코드 최종 결정) → 네 갈래
   chat      : 인사·잡담·무관한 질문 → chat_answer
   category  : 성질로 물질 찾기("자연발화하는 것은?")
               category_suggest(LLM 후보) → category_verify(성질의 H코드가 SDS에 있는 물질만)
-  knowledge : 물질 이름 없는 일반 화학 질문("흡습성 물질은?")
-              knowledge_answer(LLM 설명 + 언급 물질) → knowledge_review(수치·H코드 점검, 반려 시 재작성)
+  knowledge : 물질 이름 없는 일반 화학 질문("흡습성 물질은?") — RAG
+              knowledge_retrieve(MCP search_knowledge Tool → 벡터 DB 의미 검색)
+              → knowledge_answer(검색 문서를 근거로 LLM 설명 + 언급 물질)
+              → knowledge_review(문서에 없는 수치·H코드 점검, 반려 시 재작성)
               → knowledge_verify(언급 물질 SDS 확인) → knowledge_finalize
   safety    : 특정 물질 사용 전 안내
               plan(MCP Prompt 절차 반영) → gate(혼촉 점검 필요 여부를 코드가 결정)
@@ -65,6 +67,7 @@ class AgentState(TypedDict, total=False):
     knowledge_feedback: str
     unverified: list[str]
     checked: list[dict]
+    docs: list[dict]
 
 
 def _cost(state: AgentState, usage: dict) -> float:
@@ -224,33 +227,50 @@ def compose_category(spec: dict, confirmed: list[dict], unconfirmed: list[dict])
     return "\n".join(out)
 
 
-# ── 일반 화학 질문: knowledge_answer → knowledge_review ─(반려, 최대 2회)─▶ knowledge_answer
-#                                                    └─▶ knowledge_verify(물질 SDS 확인) → knowledge_finalize
+# ── 일반 화학 질문(RAG): knowledge_retrieve → knowledge_answer → knowledge_review ─(반려, 최대 2회)─▶ knowledge_answer
+#                                                                         └─▶ knowledge_verify(물질 SDS 확인) → knowledge_finalize
 KNOWLEDGE_MAX_ATTEMPTS = 2
+
+
+@traceable(name="knowledge_retrieve_node")
+async def knowledge_retrieve_node(state: AgentState, deps: SupervisorDeps) -> dict:
+    """RAG 검색 — MCP Tool search_knowledge로 벡터 DB에서 질문과 가까운 지식 문서를 찾는다.
+    관련도가 낮은 문서는 Tool이 이미 걸러 낸다. 검색이 실패해도 답변은 계속한다(문서 없이)."""
+    try:
+        found, retries = await with_retry(deps.mcp.call_tool, "search_knowledge",
+                                          {"query": state["query"], "k": 3})
+        docs, embedder = found.get("results", []), found.get("embedder")
+        event = {"type": "KnowledgeRetrieved", "count": len(docs), "embedder": embedder,
+                 "titles": [d["title"] for d in docs], "scores": [d["score"] for d in docs]}
+    except Exception as exc:
+        docs, retries = [], 0
+        event = {"type": "KnowledgeRetrieved", "count": 0, "error": type(exc).__name__}
+    return {"docs": docs, "retry_count": state.get("retry_count", 0) + retries,
+            "events": state["events"] + [event]}
 
 
 @traceable(name="knowledge_answer_node")
 async def knowledge_answer_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """고품질 모델이 일반 화학 지식으로 답하고, 답에서 언급한 물질(CAS)을 함께 낸다."""
+    """고품질 모델이 검색 문서를 근거로 답하고, 답에서 언급한 물질(CAS)을 함께 낸다."""
     attempt = state.get("knowledge_attempts", 0) + 1
     result, usage = await deps.quality_llm.answer(
-        state["query"], state.get("history", []), state.get("knowledge_feedback"))
+        state["query"], state.get("history", []), state.get("knowledge_feedback"), state.get("docs", []))
     event = {"type": "KnowledgeAnswered", "attempt": attempt, "substances": len(result["substances"])}
     return {"knowledge": result, "knowledge_attempts": attempt, "last_prompt": usage.get("prompt"),
             "cost_usd": _cost(state, usage), "events": state["events"] + [event]}
 
 
-def check_knowledge(answer: str) -> tuple[list[str], list[str], list[str]]:
+def check_knowledge(answer: str, evidence: str = "") -> tuple[list[str], list[str], list[str]]:
     """일반 지식 답 점검 — (반려 사유, 확인 안 된 수치, 확인 안 된 H코드).
-    일반 지식 답에는 근거 자료가 없으므로, 단위가 붙은 수치와 H코드는 모두 '확인 안 됨'이다."""
-    numbers, codes = ungrounded(answer, "")
+    evidence(검색 문서)에 있는 수치·H코드는 근거가 있으므로 통과, 없는 것은 '확인 안 됨'이다."""
+    numbers, codes = ungrounded(answer, evidence)
     problems = []
     if not answer.strip():
         problems.append("답이 비어 있습니다")
     if numbers:
-        problems.append(f"SDS로 확인하지 않은 수치가 있습니다({', '.join(numbers)}) — 수치는 빼세요")
+        problems.append(f"근거 문서·SDS에 없는 수치가 있습니다({', '.join(numbers)}) — 수치는 빼세요")
     if codes:
-        problems.append(f"SDS로 확인하지 않은 H코드가 있습니다({', '.join(codes)}) — 코드는 빼세요")
+        problems.append(f"근거 문서·SDS에 없는 H코드가 있습니다({', '.join(codes)}) — 코드는 빼세요")
     return problems, numbers, codes
 
 
@@ -259,7 +279,8 @@ async def knowledge_review_node(state: AgentState, deps: SupervisorDeps) -> dict
     """코드 점검 — 빈 답, 안전 수치(°C·%·ppm 등), H코드가 있으면 반려해 다시 쓰게 한다(최대 2회).
     끝까지 남은 수치·코드는 지우지 않고 화면에 '확인 안 됨' 경고를 붙인다."""
     attempt = state.get("knowledge_attempts", 1)
-    problems, numbers, codes = check_knowledge(state["knowledge"]["answer"])
+    evidence = "\n".join(d["text"] for d in state.get("docs", []))
+    problems, numbers, codes = check_knowledge(state["knowledge"]["answer"], evidence)
     retry = bool(problems) and attempt < KNOWLEDGE_MAX_ATTEMPTS
     feedback = ("점검 반려: " + "; ".join(problems)) if retry else None
     event = {"type": "KnowledgeReviewed", "attempt": attempt, "ok": not problems,
@@ -290,9 +311,12 @@ async def knowledge_verify_node(state: AgentState, deps: SupervisorDeps) -> dict
     return {"checked": checked, "retry_count": retry_total, "events": events}
 
 
-def compose_knowledge(answer: str, checked: list[dict], unverified: list[str], intent: dict) -> str:
+def compose_knowledge(answer: str, checked: list[dict], unverified: list[str], intent: dict,
+                      docs: list[dict] | None = None) -> str:
     out = prompts.intent_warnings(intent, [])
     out += ["[일반 화학 지식] SDS로 확인한 내용이 아닙니다", answer]
+    if docs:
+        out.append("참고 문서(벡터 DB 검색): " + ", ".join(f"{d['title']} ({d['doc']})" for d in docs))
     if unverified:
         out.append(f"⚠️ 답에 SDS로 확인하지 않은 값이 있습니다({', '.join(unverified)}) — "
                    "사용 전 공식 SDS로 확인하세요.")
@@ -318,9 +342,10 @@ async def knowledge_finalize_node(state: AgentState, deps: SupervisorDeps) -> di
     intent = chem_rules.detect_intent(state["query"])
     checked = state.get("checked", [])
     unverified = state.get("unverified", [])
+    docs = [{"title": d["title"], "doc": d["doc"], "score": d["score"]} for d in state.get("docs", [])]
     notice = {"kind": "knowledge", "answer": answer, "substances": checked,
-              "unverified": unverified, "intent": intent}
-    return {"final": compose_knowledge(answer, checked, unverified, intent), "notice": notice,
+              "unverified": unverified, "intent": intent, "docs": docs}
+    return {"final": compose_knowledge(answer, checked, unverified, intent, docs), "notice": notice,
             "events": events}
 
 
@@ -652,7 +677,7 @@ async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
 
 def _after_route(state: AgentState) -> str:
     return {"chat": "chat_answer", "category": "category_suggest",
-            "knowledge": "knowledge_answer"}.get(state["route"], "plan")
+            "knowledge": "knowledge_retrieve"}.get(state["route"], "plan")
 
 
 def _after_knowledge_review(state: AgentState) -> str:
@@ -679,6 +704,7 @@ def build_graph(deps: SupervisorDeps):
     g.add_node("category_suggest", node(category_suggest_node))
     g.add_node("category_verify", node(category_verify_node))
     # 일반 화학 질문
+    g.add_node("knowledge_retrieve", node(knowledge_retrieve_node))
     g.add_node("knowledge_answer", node(knowledge_answer_node))
     g.add_node("knowledge_review", node(knowledge_review_node))
     g.add_node("knowledge_verify", node(knowledge_verify_node))
@@ -696,12 +722,13 @@ def build_graph(deps: SupervisorDeps):
     g.set_entry_point("route")
     g.add_conditional_edges("route", _after_route,
                             {"chat_answer": "chat_answer", "category_suggest": "category_suggest",
-                             "knowledge_answer": "knowledge_answer", "plan": "plan"})
+                             "knowledge_retrieve": "knowledge_retrieve", "plan": "plan"})
     g.add_edge("chat_answer", END)
 
     g.add_edge("category_suggest", "category_verify")
     g.add_edge("category_verify", END)
 
+    g.add_edge("knowledge_retrieve", "knowledge_answer")
     g.add_edge("knowledge_answer", "knowledge_review")
     g.add_conditional_edges("knowledge_review", _after_knowledge_review,
                             {"knowledge_answer": "knowledge_answer", "knowledge_verify": "knowledge_verify",

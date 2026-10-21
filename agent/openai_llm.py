@@ -146,10 +146,11 @@ class OpenAIQualityLLM(OpenAILLM):
         return await self._chat_stream(prompts.WRITE_SYSTEM, user, on_token=on_token)
 
     @traceable(run_type="llm", name="openai_quality.answer")
-    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
+    async def answer(self, query: str, history: list[dict], feedback: str | None,
+                     docs: list[dict] | None = None) -> tuple[dict, dict]:
         """일반 화학 질문 — 설명과 언급한 물질(CAS)을 JSON 모드로 받는다."""
         system = prompts.KNOWLEDGE_SYSTEM + " " + prompts.KNOWLEDGE_JSON_HINT
-        content, usage = await self._chat(system, prompts.knowledge_user(query, history, feedback),
+        content, usage = await self._chat(system, prompts.knowledge_user(query, history, feedback, docs),
                                           json_mode=True)
         try:
             raw = json.loads(content)

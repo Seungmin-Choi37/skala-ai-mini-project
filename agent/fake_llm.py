@@ -5,7 +5,8 @@
 - plan  : 물질이 1종이어도 analysis task를 끼워 넣는 '모델의 자기모순' → gate가 제거
 - write : 1차 초안은 일부러 부실하게 → validate가 반려 → 2차에 형식을 갖춘 안내문
 
-일반 화학 질문(answer)에는 지식이 없으므로 "알 수 없습니다"로 답한다 — 실모델 모드에서 답한다.
+일반 화학 질문(answer)은 벡터 DB가 찾은 문서의 문장을 옮겨 답하고(지식을 지어내지 않음),
+찾은 문서가 없으면 "알 수 없습니다"로 답한다.
 
 모든 메서드는 실모델 백엔드(ollama/openai)와 똑같이 async다 — 그래프는 백엔드를 가리지 않고 await한다.
 """
@@ -94,13 +95,21 @@ class QualityLLM(FakeLLM):
         return draft, self._usage(query + str(feedback), draft)
 
     @traceable(run_type="llm", name="quality_llm.answer")
-    async def answer(self, query: str, history: list[dict], feedback: str | None) -> tuple[dict, dict]:
-        """일반 화학 질문 — fake에는 화학 지식이 없으므로 지어내지 않고 모른다고 답한다."""
-        result = {"answer": UNKNOWN_REPLY.split(".")[0] + " — fake 모드에는 LLM이 없어 일반 화학 질문에는 "
-                            "답하지 않습니다. 실제 AI 모드(OpenAI·Ollama)로 켜면 답합니다. 특정 물질의 사용 전 "
-                            "안전 안내는 물질 이름이나 CAS 번호로 물어보세요.",
-                  "substances": []}
-        return result, self._usage(query, result["answer"])
+    async def answer(self, query: str, history: list[dict], feedback: str | None,
+                     docs: list[dict] | None = None) -> tuple[dict, dict]:
+        """일반 화학 질문 — fake에는 화학 지식이 없으므로, 벡터 DB가 찾아 준 문서의 문장만 옮겨 답한다.
+        찾은 문서가 없으면 지어내지 않고 모른다고 답한다."""
+        if not docs:
+            text = (UNKNOWN_REPLY.split(".")[0] + " — 관련 문서를 찾지 못했고, fake 모드에는 LLM이 없어 일반 "
+                    "지식으로 답하지 않습니다. 실제 AI 모드(OpenAI·Ollama)로 켜면 답합니다. 특정 물질의 사용 전 "
+                    "안전 안내는 물질 이름이나 CAS 번호로 물어보세요.")
+            return {"answer": text, "substances": []}, self._usage(query, text)
+        top = docs[0]
+        sentences = re.split(r"(?<=[.다])\s+", top["text"].replace("\n", " "))
+        text = f"참고 문서 「{top['title']}」에 따르면 — " + " ".join(sentences[:4]).strip()
+        if len(docs) > 1:
+            text += "\n함께 볼 문서: " + ", ".join(f"「{d['title']}」" for d in docs[1:])
+        return {"answer": text, "substances": []}, self._usage(query, text)
 
 
 def _guide_lines(guides: list[str], prefix: str) -> list[str]:

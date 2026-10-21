@@ -95,12 +95,14 @@ def normalize_candidates(raw: dict, limit: int = 8) -> list[dict]:
     return out
 
 
-# ── 일반 화학 질문(knowledge): LLM이 설명하고, 답에 나온 물질은 코드가 SDS로 확인한다 ──
+# ── 일반 화학 질문(knowledge): 벡터 DB에서 찾은 문서(RAG)를 근거로 LLM이 설명하고,
+#    답에 나온 물질은 코드가 SDS로 확인한다 ──
 UNKNOWN_REPLY = "알 수 없습니다. 이 서비스는 화학물질과 실험실 안전에 관한 질문에만 답합니다."
 
 KNOWLEDGE_SYSTEM = (
     "당신은 화학 실험실 안전 담당자다. 특정 물질 이름이 없는 일반 화학·실험실 안전 질문에 한국어로 "
-    "3~6문장으로 답하라. 교과서 수준의 일반 지식으로 개념·원리를 설명하고, 필요하면 대표적인 물질 "
+    "3~6문장으로 답하라. '참고 문서'가 주어지면 그 내용을 가장 우선하는 근거로 쓰고, 문서에 없는 내용은 "
+    "교과서 수준의 일반 지식으로만 보충하라. 참고 문서와 어긋나는 내용은 쓰지 마라. 필요하면 대표적인 물질 "
     "예를 들어라. 답에서 언급한 화학물질은 substances에 한국어명·영문명·CAS 번호와 함께 넣어라 — "
     "CAS 번호가 확실하지 않은 물질은 넣지 마라. 이 물질들은 코드가 SDS로 하나씩 확인해 사용자에게 표시한다. "
     "인화점·노출기준·독성값·농도 같은 안전 수치와 H코드는 쓰지 마라(물질별 수치는 SDS로 확인하도록 "
@@ -112,8 +114,14 @@ KNOWLEDGE_JSON_HINT = ('JSON 객체로만 응답하라. 스키마: {"answer": st
                        '[{"name_ko": string, "name_en": string, "cas": string}]}')
 
 
-def knowledge_user(query: str, history: list[dict], feedback: str | None) -> str:
+def render_docs(docs: list[dict]) -> str:
+    return "\n\n".join(f"[문서 {i + 1}] {d['title']}\n{d['text']}" for i, d in enumerate(docs or []))
+
+
+def knowledge_user(query: str, history: list[dict], feedback: str | None,
+                   docs: list[dict] | None = None) -> str:
     user = chat_user(query, history)
+    user += "\n\n## 참고 문서 (벡터 DB 검색 결과)\n" + (render_docs(docs) or "(관련 문서 없음 — 일반 지식으로 답하라)")
     if feedback:
         user += f"\n\n## 이전 답에 대한 점검 반려 사유 (반드시 반영)\n{feedback}"
     return user

@@ -3,11 +3,13 @@
 - LLM은 fake, 데이터는 sample 모드, KOSHA는 끈다 (.env에 실제 키가 있어도 쓰지 않는다.
   python-dotenv는 이미 정해진 환경변수를 덮어쓰지 않으므로 여기서 먼저 정해 두면 된다)
 - 영구 캐시(lookup_cache.db)는 끈다 — 캐시 테스트는 임시 폴더에 따로 만든다
+- RAG 벡터 DB는 로컬 임베딩으로, 임시 폴더에 만든다
 - LangSmith 추적은 끈다
 """
 import asyncio
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,6 +22,8 @@ os.environ["CHEM_CACHE_TTL_DAYS"] = "0"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["SUPERVISOR_VERSION"] = "v2"
+os.environ["EMBEDDING_BACKEND"] = "local"     # RAG 벡터 DB는 로컬 임베딩으로 (키·인터넷 없이)
+os.environ["VECTOR_DB_PATH"] = str(Path(tempfile.mkdtemp()) / "vector_store.db")
 
 import pytest  # noqa: E402
 
@@ -45,7 +49,8 @@ class InProcessMCP:
     async def call_tool(self, name, arguments, server="chem"):
         self.calls.append((name, arguments))
         return {"get_substance_safety": mcp_server.get_substance_safety,
-                "get_kosha_msds": mcp_server.get_kosha_msds}[name](**arguments)
+                "get_kosha_msds": mcp_server.get_kosha_msds,
+                "search_knowledge": mcp_server.search_knowledge}[name](**arguments)
 
     async def find_resource_template(self, name):
         return "chem", "safety-guide://hazard/{hazard_type}"
